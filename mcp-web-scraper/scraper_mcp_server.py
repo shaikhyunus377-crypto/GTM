@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Remote MCP Server — Web Scraper
-MCP Streamable HTTP transport (POST /mcp) — required by Claude.ai web.
+Remote MCP Server + REST Scrape API
+MCP Streamable HTTP at POST /mcp (Claude.ai web)
+REST scrape API at POST /scrape (frontend)
 Deploy to Railway; set SCRAPINGBEE_API_KEY and BASE_URL in Railway env vars.
 """
 
@@ -48,7 +49,7 @@ TOOLS = [{
     },
 }]
 
-# ── Scraping logic ──────────────────────────────────────────────────────────────────────
+# ── Scraping logic ─────────────────────────────────────────────────────────────
 
 TAGS = ['a','button','h1','h2','h3','h4','h5','h6','img','input','form','label','section','header','footer']
 COORDINATE_JS = (
@@ -146,7 +147,23 @@ def scrape_sync(url: str) -> dict:
     return result
 
 
-# ── MCP Streamable HTTP handler (JSON-RPC 2.0) ──────────────────────────────────────
+# ── REST scrape API (used by frontend) ────────────────────────────────────────
+
+async def handle_scrape_api(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    url = body.get("url", "").strip()
+    if not url.startswith("http"):
+        return JSONResponse({"error": "URL must start with http:// or https://"}, status_code=400)
+    log.info("REST scrape: %s", url)
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, scrape_sync, url)
+    return JSONResponse(result)
+
+
+# ── MCP Streamable HTTP (JSON-RPC 2.0) ────────────────────────────────────────
 
 async def dispatch(msg: dict):
     method = msg.get("method", "")
@@ -194,14 +211,13 @@ async def dispatch(msg: dict):
             content.append({"type": "image", "data": result["screenshot_b64"], "mimeType": "image/png"})
         return ok({"content": content, "isError": False})
     elif msg_id is None:
-        return None  # notification — no response
+        return None
     else:
         return err(-32601, f"Method not found: {method}")
 
 
 async def handle_mcp(request: Request):
     if request.method == "GET":
-        # Keep-alive SSE stream for server-initiated messages
         async def event_stream():
             while True:
                 yield "event: ping\ndata: {}\n\n"
@@ -210,7 +226,6 @@ async def handle_mcp(request: Request):
             event_stream(), media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
-
     try:
         body = await request.json()
     except Exception:
@@ -218,18 +233,16 @@ async def handle_mcp(request: Request):
             {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error"}},
             status_code=400,
         )
-
     if isinstance(body, list):
         responses = [r for r in [await dispatch(m) for m in body] if r is not None]
         return JSONResponse(responses) if responses else Response(status_code=202)
-
     result = await dispatch(body)
     if result is None:
         return Response(status_code=202)
     return JSONResponse(result)
 
 
-# ── OAuth 2.0 (required by Claude.ai web) ─────────────────────────────────────────────────
+# ── OAuth 2.0 ─────────────────────────────────────────────────────────────────
 
 async def oauth_protected_resource(request: Request):
     return JSONResponse({
@@ -268,13 +281,16 @@ async def oauth_token(request: Request):
 async def healthcheck(request: Request):
     return JSONResponse({
         "status": "ok",
-        "server": "web-scraper MCP",
-        "transport": "streamable-http",
-        "endpoint": "/mcp",
+        "server": "web-scraper MCP + REST API",
+        "endpoints": {
+            "mcp": "/mcp",
+            "scrape": "POST /scrape",
+            "health": "/",
+        },
     })
 
 
-# ── App ─────────────────────────────────────────────────────────────────────────────────────
+# ── App ───────────────────────────────────────────────────────────────────────
 
 web = Starlette(routes=[
     Route("/", healthcheck),
@@ -283,6 +299,7 @@ web = Starlette(routes=[
     Route("/oauth/authorize", oauth_authorize),
     Route("/oauth/token", oauth_token, methods=["GET", "POST"]),
     Route("/mcp", handle_mcp, methods=["GET", "POST", "OPTIONS"]),
+    Route("/scrape", handle_scrape_api, methods=["POST", "OPTIONS"]),
 ])
 
 web.add_middleware(
