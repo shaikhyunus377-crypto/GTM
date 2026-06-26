@@ -33,11 +33,13 @@ BASE_URL = os.environ.get("BASE_URL", "https://gtm-production-8ae5.up.railway.ap
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-# cro_bots lives one level up from mcp-web-scraper/
+# cro_bots may live alongside this file (mcp-web-scraper/cro_bots/)
+# or one level up (repo root cro_bots/). Try both.
 THIS_DIR  = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(THIS_DIR)
-if REPO_ROOT not in sys.path:
-    sys.path.insert(0, REPO_ROOT)
+for _p in [THIS_DIR, REPO_ROOT]:
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 try:
     from cro_bots.cro_audit import run_audit
