@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 from scrapingbee import ScrapingBeeClient
 from mcp.server import Server
-from mcp.server.sse import SseServerTransport
+from mcp.server.streamable_http import StreamableHTTPServerTransport
 from mcp.types import Tool, TextContent, ImageContent
 from starlette.applications import Starlette
 from starlette.routing import Route, Mount
@@ -74,15 +74,11 @@ def build_dom_states(html, url, live_elements):
 def scrape_sync(url):
     if not SCRAPINGBEE_API_KEY:
         return {"error": "SCRAPINGBEE_API_KEY env var not set."}
-
     client = ScrapingBeeClient(api_key=SCRAPINGBEE_API_KEY)
     folder = os.path.join(OUTPUT_DIR, safe_folder(url))
     os.makedirs(folder, exist_ok=True)
-
     result = {"html_path": None, "dom_states_path": None, "screenshot_path": None,
                "dom_summary": None, "screenshot_b64": None, "error": None}
-
-    # STEP 1: Rendered HTML
     try:
         resp = client.get(url, params={
             "render_js": "true", "wait": "4500",
@@ -92,7 +88,6 @@ def scrape_sync(url):
         if resp.status_code != 200:
             result["error"] = f"ScrapingBee failed: {resp.status_code}"
             return result
-
         html = resp.text
         soup = BeautifulSoup(html, "html.parser")
         container = soup.find(id="scrapingbee-live-dom-matrices")
@@ -101,17 +96,13 @@ def scrape_sync(url):
             live_elements = json.loads(container.text)
             container.decompose()
             html = str(soup)
-
         html_path = os.path.join(folder, "full_rendered_inlined.html")
         with open(html_path, "w", encoding="utf-8") as f:
             f.write(html)
         result["html_path"] = html_path
-
     except Exception as exc:
         result["error"] = f"HTML fetch error: {exc}"
         return result
-
-    # STEP 2: Screenshot
     try:
         ss = client.get(url, params={
             "render_js": "true", "wait": "4500",
@@ -126,19 +117,14 @@ def scrape_sync(url):
                 result["screenshot_b64"] = base64.b64encode(ss.content).decode()
     except Exception as exc:
         log.warning("Screenshot error: %s", exc)
-
-    # STEP 3: DOM states
     dom = build_dom_states(html, url, live_elements)
     dom_path = os.path.join(folder, "dom_states.json")
     with open(dom_path, "w", encoding="utf-8") as f:
         json.dump(dom, f, indent=2, ensure_ascii=False)
     result["dom_states_path"] = dom_path
     result["dom_summary"] = {"total_elements": len(dom["elements"]), "sample": dom["elements"][:5]}
-
     return result
 
-
-# ── MCP Server ────────────────────────────────────────────────────────────────
 
 mcp_app = Server("web-scraper")
 
@@ -152,9 +138,9 @@ async def list_tools():
             "Returns fully rendered HTML, DOM states JSON with bounding boxes, "
             "and a full-page PNG screenshot."
         ),
-        inputSchema={"type": "object", "properties": {
-            "url": {"type": "string", "description": "Full URL to scrape"}
-        }, "required": ["url"]},
+        inputSchema={"type": "object",
+                     "properties": {"url": {"type": "string", "description": "Full URL to scrape"}},
+                     "required": ["url"]},
     )]
 
 
@@ -162,17 +148,13 @@ async def list_tools():
 async def call_tool(name, arguments):
     if name != "scrape_website":
         raise ValueError(f"Unknown tool: {name}")
-
     url = arguments.get("url", "").strip()
     if not url.startswith("http"):
         return [TextContent(type="text", text="Error: URL must start with http:// or https://")]
-
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(None, scrape_sync, url)
-
     if result.get("error"):
         return [TextContent(type="text", text=f"Scrape failed: {result['error']}")]
-
     lines = [
         f"Scrape complete for: {url}", "",
         f"DOM summary: {result['dom_summary']['total_elements']} elements extracted.", "",
@@ -189,18 +171,14 @@ async def call_tool(name, arguments):
     return content
 
 
-# ── HTTP + SSE transport ──────────────────────────────────────────────────────
+# ── Streamable HTTP transport (Claude.ai web compatible) ─────────────────────
 
-sse_transport = SseServerTransport("/messages/")
-
-
-async def handle_sse(request: Request):
-    async with sse_transport.connect_sse(request.scope, request.receive, request._send) as streams:
-        await mcp_app.run(streams[0], streams[1], mcp_app.create_initialization_options())
-
-
-async def handle_messages(request: Request):
-    await sse_transport.handle_post_message(request.scope, request.receive, request._send)
+async def handle_mcp(request: Request):
+    transport = StreamableHTTPServerTransport(mcp_session_id=None)
+    async with transport.connect() as streams:
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(mcp_app.run, streams[0], streams[1], mcp_app.create_initialization_options())
+            tg.start_soon(transport.handle_request, request.scope, request.receive, request._send)
 
 
 async def healthcheck(request: Request):
@@ -209,10 +187,8 @@ async def healthcheck(request: Request):
 
 web = Starlette(routes=[
     Route("/", healthcheck),
-    Route("/sse", handle_sse),
-    Mount("/messages/", app=handle_messages),
+    Route("/mcp", handle_mcp, methods=["GET", "POST", "DELETE"]),
 ])
-
 
 if __name__ == "__main__":
     uvicorn.run(web, host="0.0.0.0", port=PORT)
