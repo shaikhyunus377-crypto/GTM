@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """
 Remote MCP Server + REST Scrape API
-MCP Streamable HTTP at POST /mcp (Claude.ai web)
-REST scrape API at POST /scrape (frontend) - returns html, dom_states, screenshot as base64
-Deploy to Railway; set SCRAPINGBEE_API_KEY and BASE_URL in Railway env vars.
+POST /scrape  — Hunter.io decision maker check -> full scrape
+POST /mcp     — MCP Streamable HTTP for Claude.ai web
 """
 
 import os
@@ -12,6 +11,7 @@ import base64
 import logging
 import asyncio
 import secrets
+import urllib.request
 from urllib.parse import urlparse, urlencode
 
 from bs4 import BeautifulSoup
@@ -24,31 +24,98 @@ from starlette.middleware.cors import CORSMiddleware
 import uvicorn
 
 SCRAPINGBEE_API_KEY = os.environ.get("SCRAPINGBEE_API_KEY", "")
-PORT = int(os.environ.get("PORT", 8000))
+HUNTER_API_KEY      = os.environ.get("HUNTER_API_KEY", "")
+PORT     = int(os.environ.get("PORT", 8000))
 BASE_URL = os.environ.get("BASE_URL", "https://gtm-production-8ae5.up.railway.app")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
 MCP_PROTOCOL_VERSION = "2024-11-05"
-SERVER_INFO = {"name": "web-scraper", "version": "1.0.0"}
+SERVER_INFO = {"name": "web-scraper", "version": "2.0.0"}
 
 TOOLS = [{
     "name": "scrape_website",
-    "description": (
-        "Scrapes a website using a real headless browser (ScrapingBee). "
-        "Returns rendered HTML, DOM states JSON with bounding boxes, and a full-page PNG screenshot."
-    ),
+    "description": "Checks Hunter.io for a decision maker, then scrapes the site. Returns rendered HTML, DOM states, screenshot, and contact info.",
     "inputSchema": {
         "type": "object",
-        "properties": {
-            "url": {"type": "string", "description": "Full URL to scrape, e.g. https://example.com"}
-        },
+        "properties": {"url": {"type": "string"}},
         "required": ["url"],
     },
 }]
 
-# -- Scraping logic -----------------------------------------------------------
+# Decision-maker title keywords (ordered by priority)
+DM_TITLES = [
+    "ceo","chief executive","founder","co-founder","president","owner",
+    "cto","cfo","coo","cmo","cpo","chief",
+    "vp ","vice president","svp","evp",
+    "director","head of","managing director","general manager",
+    "partner","principal","managing partner",
+]
+
+
+def extract_domain(url: str) -> str:
+    try:
+        parsed = urlparse(url)
+        domain = parsed.netloc.replace("www.", "")
+        return domain.split(":")[0]
+    except Exception:
+        return ""
+
+
+def hunter_lookup(domain: str, api_key: str) -> dict:
+    """
+    Call Hunter.io domain-search and return the best decision-maker contact.
+    Returns: {found: bool, first_name, last_name, email, phone, title}
+    """
+    if not api_key:
+        return {"found": False, "error": "No Hunter API key provided"}
+    try:
+        qs = urlencode({"domain": domain, "api_key": api_key, "limit": 20})
+        url = f"https://api.hunter.io/v2/domain-search?{qs}"
+        with urllib.request.urlopen(url, timeout=15) as resp:
+            data = json.loads(resp.read())
+    except Exception as exc:
+        log.warning("Hunter API error for %s: %s", domain, exc)
+        return {"found": False, "error": str(exc)}
+
+    emails = data.get("data", {}).get("emails", [])
+    if not emails:
+        return {"found": False, "error": "No emails found on domain"}
+
+    # Score each contact — higher = better decision maker
+    def dm_score(e):
+        score = 0
+        title = (e.get("position") or "").lower()
+        seniority = (e.get("seniority") or "").lower()
+        if seniority == "executive": score += 100
+        elif seniority == "senior":  score += 50
+        for i, kw in enumerate(DM_TITLES):
+            if kw in title:
+                score += (len(DM_TITLES) - i) * 10
+                break
+        score += int(e.get("confidence", 0))
+        return score
+
+    best = max(emails, key=dm_score)
+    score = dm_score(best)
+
+    if score == 0:
+        # No recognisable decision-maker title found
+        return {"found": False, "error": "No decision maker found (no executive/director titles)"}
+
+    return {
+        "found": True,
+        "first_name": best.get("first_name") or "",
+        "last_name":  best.get("last_name")  or "",
+        "email":      best.get("value")       or "",
+        "phone":      best.get("phone_number") or "",
+        "title":      best.get("position")    or "",
+        "confidence": best.get("confidence",  0),
+    }
+
+
+# -- Scraping -----------------------------------------------------------------
 
 TAGS = ['a','button','h1','h2','h3','h4','h5','h6','img','input','form','label','section','header','footer']
 COORDINATE_JS = (
@@ -90,23 +157,20 @@ def build_dom_states(html: str, url: str, live_elements: list) -> dict:
 
 def scrape_sync(url: str) -> dict:
     if not SCRAPINGBEE_API_KEY:
-        return {"error": "SCRAPINGBEE_API_KEY env var not set."}
+        return {"error": "SCRAPINGBEE_API_KEY not set"}
     client = ScrapingBeeClient(api_key=SCRAPINGBEE_API_KEY)
+    result = {"error": None, "html": None, "dom_states": None,
+              "dom_summary": None, "screenshot_b64": None, "slug": safe_slug(url)}
 
-    result = {
-        "error": None,
-        "html": None,           # full rendered HTML string
-        "dom_states": None,     # full dom states dict
-        "dom_summary": None,    # {total_elements, sample}
-        "screenshot_b64": None, # base64 PNG
-        "slug": safe_slug(url),
-    }
-
-    # Step 1: rendered HTML + coordinate injection
+    # Step 1: rendered HTML
     try:
         resp = client.get(url, params={
-            "render_js": "true", "wait": "4500",
-            "window_width": "1440", "window_height": "2000",
+            "render_js": "true",
+            "wait": "8000",           # wait 8s for full load
+            "wait_browser": "networkidle2",
+            "window_width": "1440",
+            "window_height": "900",
+            "block_ads": "true",
             "js_scenario": {"instructions": [{"evaluate": COORDINATE_JS}]},
         })
         if resp.status_code != 200:
@@ -128,102 +192,117 @@ def scrape_sync(url: str) -> dict:
         result["error"] = f"HTML fetch error: {exc}"
         return result
 
-    # Step 2: full-page screenshot
+    # Step 2: full-page screenshot — separate request, full page scroll capture
     try:
         ss = client.get(url, params={
-            "render_js": "true", "wait": "4500",
-            "screenshot": "true", "screenshot_full_page": "true", "window_width": "1440",
+            "render_js": "true",
+            "wait": "8000",
+            "wait_browser": "networkidle2",
+            "screenshot": "true",
+            "screenshot_full_page": "true",
+            "window_width": "1440",
+            "block_ads": "true",
         })
         if ss.status_code == 200:
             result["screenshot_b64"] = base64.b64encode(ss.content).decode()
     except Exception as exc:
         log.warning("Screenshot error: %s", exc)
 
-    # Step 3: dom_states
+    # Step 3: DOM states
     dom = build_dom_states(html, url, live_elements)
     result["dom_states"] = dom
     result["dom_summary"] = {
         "total_elements": len(dom["elements"]),
         "sample": dom["elements"][:5],
     }
-
     return result
 
 
-# -- REST scrape API (frontend) -----------------------------------------------
+# -- REST /scrape API ---------------------------------------------------------
 
 async def handle_scrape_api(request: Request):
     try:
         body = await request.json()
     except Exception:
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
     url = body.get("url", "").strip()
     if not url.startswith("http"):
         return JSONResponse({"error": "URL must start with http:// or https://"}, status_code=400)
-    log.info("REST scrape: %s", url)
+
+    # Use Hunter key from request body first, then fall back to server env var
+    hunter_key = body.get("hunter_api_key", "").strip() or HUNTER_API_KEY
+    skip_hunter = body.get("skip_hunter", False)
+
+    hunter_data = None
+    if not skip_hunter and hunter_key:
+        domain = extract_domain(url)
+        log.info("Hunter lookup: %s", domain)
+        hunter_data = hunter_lookup(domain, hunter_key)
+        if not hunter_data.get("found"):
+            return JSONResponse({
+                "no_decision_maker": True,
+                "hunter_data": hunter_data,
+                "url": url,
+            })
+
+    log.info("Scraping: %s", url)
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(None, scrape_sync, url)
+    result["hunter_data"] = hunter_data
+    result["no_decision_maker"] = False
     return JSONResponse(result)
 
 
-# -- MCP Streamable HTTP (JSON-RPC 2.0) ---------------------------------------
+# -- MCP Streamable HTTP ------------------------------------------------------
 
 async def dispatch(msg: dict):
     method = msg.get("method", "")
     msg_id = msg.get("id")
     params = msg.get("params", {})
-
-    def ok(result):
-        return {"jsonrpc": "2.0", "id": msg_id, "result": result}
-
-    def err(code, message):
-        return {"jsonrpc": "2.0", "id": msg_id, "error": {"code": code, "message": message}}
+    def ok(r): return {"jsonrpc":"2.0","id":msg_id,"result":r}
+    def err(c,m): return {"jsonrpc":"2.0","id":msg_id,"error":{"code":c,"message":m}}
 
     if method == "initialize":
-        return ok({"protocolVersion": MCP_PROTOCOL_VERSION, "capabilities": {"tools": {}}, "serverInfo": SERVER_INFO})
-    elif method == "ping":
-        return ok({})
-    elif method == "tools/list":
-        return ok({"tools": TOOLS})
+        return ok({"protocolVersion":MCP_PROTOCOL_VERSION,"capabilities":{"tools":{}},"serverInfo":SERVER_INFO})
+    elif method == "ping": return ok({})
+    elif method == "tools/list": return ok({"tools":TOOLS})
     elif method == "tools/call":
         name = params.get("name")
-        args = params.get("arguments", {})
-        if name != "scrape_website":
-            return err(-32601, f"Unknown tool: {name}")
-        url = args.get("url", "").strip()
+        args = params.get("arguments",{})
+        if name != "scrape_website": return err(-32601,f"Unknown tool: {name}")
+        url = args.get("url","").strip()
         if not url.startswith("http"):
-            return ok({"content": [{"type": "text", "text": "Error: URL must start with http"}], "isError": True})
+            return ok({"content":[{"type":"text","text":"Error: URL must start with http"}],"isError":True})
         loop = asyncio.get_event_loop()
+        # Hunter check
+        hunter_key = HUNTER_API_KEY
+        if hunter_key:
+            domain = extract_domain(url)
+            hd = hunter_lookup(domain, hunter_key)
+            if not hd.get("found"):
+                return ok({"content":[{"type":"text","text":f"No decision maker found for {domain}. Skipping scrape."}],"isError":False})
         result = await loop.run_in_executor(None, scrape_sync, url)
         if result.get("error"):
-            return ok({"content": [{"type": "text", "text": f"Scrape failed: {result['error']}"}], "isError": True})
-        lines = [
-            f"Scrape complete: {url}", "",
-            f"DOM: {result['dom_summary']['total_elements']} elements found", "",
-            json.dumps(result["dom_summary"]["sample"][:3], indent=2),
-        ]
-        content = [{"type": "text", "text": "\n".join(lines)}]
+            return ok({"content":[{"type":"text","text":f"Scrape failed: {result['error']}"}],"isError":True})
+        lines = [f"Scrape complete: {url}","",f"DOM: {result['dom_summary']['total_elements']} elements"]
+        content = [{"type":"text","text":"\n".join(lines)}]
         if result.get("screenshot_b64"):
-            content.append({"type": "image", "data": result["screenshot_b64"], "mimeType": "image/png"})
-        return ok({"content": content, "isError": False})
-    elif msg_id is None:
-        return None
-    else:
-        return err(-32601, f"Method not found: {method}")
+            content.append({"type":"image","data":result["screenshot_b64"],"mimeType":"image/png"})
+        return ok({"content":content,"isError":False})
+    elif msg_id is None: return None
+    else: return err(-32601,f"Method not found: {method}")
 
 
 async def handle_mcp(request: Request):
     if request.method == "GET":
-        async def event_stream():
-            while True:
-                yield "event: ping\ndata: {}\n\n"
-                await asyncio.sleep(15)
-        return StreamingResponse(event_stream(), media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-    try:
-        body = await request.json()
+        async def es():
+            while True: yield "event: ping\ndata: {}\n\n"; await asyncio.sleep(15)
+        return StreamingResponse(es(), media_type="text/event-stream",
+            headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no"})
+    try: body = await request.json()
     except Exception:
-        return JSONResponse({"jsonrpc":"2.0","id":None,"error":{"code":-32700,"message":"Parse error"}}, status_code=400)
+        return JSONResponse({"jsonrpc":"2.0","id":None,"error":{"code":-32700,"message":"Parse error"}},status_code=400)
     if isinstance(body, list):
         responses = [r for r in [await dispatch(m) for m in body] if r is not None]
         return JSONResponse(responses) if responses else Response(status_code=202)
@@ -231,32 +310,23 @@ async def handle_mcp(request: Request):
     return Response(status_code=202) if result is None else JSONResponse(result)
 
 
-# -- OAuth 2.0 ----------------------------------------------------------------
+# -- OAuth --------------------------------------------------------------------
 
 async def oauth_protected_resource(request: Request):
-    return JSONResponse({"resource": BASE_URL, "authorization_servers": [BASE_URL], "bearer_methods_supported": ["header"]})
-
+    return JSONResponse({"resource":BASE_URL,"authorization_servers":[BASE_URL],"bearer_methods_supported":["header"]})
 async def oauth_authorization_server(request: Request):
-    return JSONResponse({
-        "issuer": BASE_URL,
-        "authorization_endpoint": f"{BASE_URL}/oauth/authorize",
-        "token_endpoint": f"{BASE_URL}/oauth/token",
-        "response_types_supported": ["code"],
-        "grant_types_supported": ["authorization_code"],
-        "code_challenge_methods_supported": ["S256"],
-    })
-
+    return JSONResponse({"issuer":BASE_URL,"authorization_endpoint":f"{BASE_URL}/oauth/authorize",
+        "token_endpoint":f"{BASE_URL}/oauth/token","response_types_supported":["code"],
+        "grant_types_supported":["authorization_code"],"code_challenge_methods_supported":["S256"]})
 async def oauth_authorize(request: Request):
     p = dict(request.query_params)
     code = secrets.token_urlsafe(32)
-    qs = urlencode({k: v for k, v in [("code", code), ("state", p.get("state",""))] if v})
-    return RedirectResponse(url=f"{p.get('redirect_uri','')}?{qs}" if p.get("redirect_uri") else "/", status_code=302)
-
+    qs = urlencode({k:v for k,v in [("code",code),("state",p.get("state",""))] if v})
+    return RedirectResponse(url=f"{p.get('redirect_uri','')}?{qs}" if p.get("redirect_uri") else "/",status_code=302)
 async def oauth_token(request: Request):
-    return JSONResponse({"access_token": secrets.token_urlsafe(32), "token_type": "bearer", "expires_in": 86400, "scope": ""})
-
+    return JSONResponse({"access_token":secrets.token_urlsafe(32),"token_type":"bearer","expires_in":86400,"scope":""})
 async def healthcheck(request: Request):
-    return JSONResponse({"status": "ok", "server": "web-scraper MCP + REST API"})
+    return JSONResponse({"status":"ok","server":"web-scraper MCP + REST API v2"})
 
 
 # -- App ----------------------------------------------------------------------
@@ -266,11 +336,10 @@ web = Starlette(routes=[
     Route("/.well-known/oauth-protected-resource", oauth_protected_resource),
     Route("/.well-known/oauth-authorization-server", oauth_authorization_server),
     Route("/oauth/authorize", oauth_authorize),
-    Route("/oauth/token", oauth_token, methods=["GET", "POST"]),
-    Route("/mcp", handle_mcp, methods=["GET", "POST", "OPTIONS"]),
-    Route("/scrape", handle_scrape_api, methods=["POST", "OPTIONS"]),
+    Route("/oauth/token", oauth_token, methods=["GET","POST"]),
+    Route("/mcp", handle_mcp, methods=["GET","POST","OPTIONS"]),
+    Route("/scrape", handle_scrape_api, methods=["POST","OPTIONS"]),
 ])
-
 web.add_middleware(CORSMiddleware, allow_origins=["*"],
     allow_methods=["GET","POST","DELETE","OPTIONS"], allow_headers=["*"], allow_credentials=False)
 
