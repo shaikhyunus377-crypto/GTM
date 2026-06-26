@@ -9,7 +9,9 @@ from urllib.parse import urlparse, urlencode
 
 from bs4 import BeautifulSoup
 from scrapingbee import ScrapingBeeClient
-from mcp.server.fastmcp import FastMCP
+from mcp.server import Server
+from mcp.server.sse import SseServerTransport
+from mcp.types import Tool, TextContent, ImageContent
 from starlette.applications import Starlette
 from starlette.routing import Route, Mount
 from starlette.requests import Request
@@ -26,7 +28,6 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 log = logging.getLogger(__name__)
 
 TAGS = ['a','button','h1','h2','h3','h4','h5','h6','img','input','form','label','section','header','footer']
-
 COORDINATE_JS = (
     "const el=Array.from(document.querySelectorAll('a,button,h1,h2,h3,h4,h5,h6,img,input,form,label,section,header,footer'))"
     ".map(e=>{const r=e.getBoundingClientRect();return{tag:e.tagName.toLowerCase(),"
@@ -121,35 +122,62 @@ def scrape_sync(url):
     return result
 
 
-# ── FastMCP server (handles streamable HTTP at /mcp) ───────────────────────────
+# ── MCP Server ─────────────────────────────────────────────────────────────
 
-fmcp = FastMCP("web-scraper")
+mcp_app = Server("web-scraper")
 
 
-@fmcp.tool()
-async def scrape_website(url: str) -> str:
-    """Scrapes a website using a real headless browser. Returns rendered HTML, DOM element states with bounding boxes, and a full-page screenshot."""
+@mcp_app.list_tools()
+async def list_tools():
+    return [Tool(
+        name="scrape_website",
+        description="Scrapes a website using a real headless browser. Returns rendered HTML, DOM states JSON with bounding boxes, and a full-page screenshot.",
+        inputSchema={"type": "object",
+                     "properties": {"url": {"type": "string", "description": "Full URL to scrape"}},
+                     "required": ["url"]},
+    )]
+
+
+@mcp_app.call_tool()
+async def call_tool(name, arguments):
+    if name != "scrape_website":
+        raise ValueError(f"Unknown tool: {name}")
+    url = arguments.get("url", "").strip()
     if not url.startswith("http"):
-        return "Error: URL must start with http:// or https://"
+        return [TextContent(type="text", text="Error: URL must start with http:// or https://")]
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(None, scrape_sync, url)
     if result.get("error"):
-        return f"Scrape failed: {result['error']}"
-    return "\n".join([
-        f"Scrape complete: {url}",
-        f"DOM elements: {result['dom_summary']['total_elements']} extracted",
-        f"Sample: {json.dumps(result['dom_summary']['sample'][:3], indent=2)}",
-        f"HTML saved: {result['html_path']}",
+        return [TextContent(type="text", text=f"Scrape failed: {result['error']}")]
+    lines = [
+        f"Scrape complete: {url}", "",
+        f"DOM: {result['dom_summary']['total_elements']} elements", "",
+        "Sample:", json.dumps(result["dom_summary"]["sample"][:3], indent=2), "",
+        f"HTML: {result['html_path']}",
         f"DOM JSON: {result['dom_states_path']}",
         f"Screenshot: {result.get('screenshot_path') or 'not captured'}",
-    ])
+    ]
+    content = [TextContent(type="text", text="\n".join(lines))]
+    if result.get("screenshot_b64"):
+        content.append(ImageContent(type="image", data=result["screenshot_b64"], mimeType="image/png"))
+    return content
 
 
-# Get the streamable HTTP ASGI app from FastMCP (mounts at /mcp)
-mcp_asgi = fmcp.streamable_http_app()
+# ── SSE transport ─────────────────────────────────────────────────────────────
+
+sse = SseServerTransport("/messages/")
 
 
-# ── OAuth 2.0 (required by Claude.ai) ──────────────────────────────────────────
+async def handle_sse(request: Request):
+    async with sse.connect_sse(request.scope, request.receive, request._send) as streams:
+        await mcp_app.run(streams[0], streams[1], mcp_app.create_initialization_options())
+
+
+async def handle_messages(request: Request):
+    await sse.handle_post_message(request.scope, request.receive, request._send)
+
+
+# ── OAuth (required by Claude.ai) ───────────────────────────────────────────
 
 async def oauth_protected_resource(request: Request):
     return JSONResponse({
@@ -157,7 +185,6 @@ async def oauth_protected_resource(request: Request):
         "authorization_servers": [BASE_URL],
         "bearer_methods_supported": ["header"],
     })
-
 
 async def oauth_authorization_server(request: Request):
     return JSONResponse({
@@ -169,7 +196,6 @@ async def oauth_authorization_server(request: Request):
         "code_challenge_methods_supported": ["S256"],
     })
 
-
 async def oauth_authorize(request: Request):
     params = dict(request.query_params)
     redirect_uri = params.get("redirect_uri", "")
@@ -179,20 +205,19 @@ async def oauth_authorize(request: Request):
     target = f"{redirect_uri}?{qs}" if redirect_uri else "/"
     return RedirectResponse(url=target, status_code=302)
 
-
 async def oauth_token(request: Request):
     return JSONResponse({
         "access_token": secrets.token_urlsafe(32),
         "token_type": "bearer",
         "expires_in": 86400,
+        "scope": "",
     })
 
-
 async def healthcheck(request: Request):
-    return JSONResponse({"status": "ok", "server": "web-scraper MCP", "mcp_endpoint": "/mcp"})
+    return JSONResponse({"status": "ok", "server": "web-scraper MCP", "transport": "sse", "endpoint": "/sse"})
 
 
-# ── Starlette app ─────────────────────────────────────────────────────────────────
+# ── App with CORS ──────────────────────────────────────────────────────────────
 
 web = Starlette(routes=[
     Route("/", healthcheck),
@@ -200,14 +225,14 @@ web = Starlette(routes=[
     Route("/.well-known/oauth-authorization-server", oauth_authorization_server),
     Route("/oauth/authorize", oauth_authorize),
     Route("/oauth/token", oauth_token, methods=["GET", "POST"]),
-    Mount("/", app=mcp_asgi),
+    Route("/sse", handle_sse),
+    Mount("/messages/", app=handle_messages),
 ])
 
-# CORS — required for Claude.ai web (browser makes cross-origin requests)
 web.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["*"],
     allow_credentials=False,
 )
