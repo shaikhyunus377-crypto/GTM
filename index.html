@@ -200,8 +200,10 @@ function industry() { return document.getElementById('industry').value; }
 function checkApi() {
   fetch(apiBase() + '/').then(r => r.json()).then(d => {
     const el = document.getElementById('apiStatus');
-    el.textContent = d.status === 'ok' ? 'API online' : 'API error';
-    el.className = 'text-xs px-3 py-1 rounded-full ' + (d.status==='ok' ? 'bg-green-900 text-green-400' : 'bg-red-900 text-red-400');
+    const ok = d.status === 'ok';
+    const cro = d.cro_available ? ' + CRO' : '';
+    el.textContent = ok ? 'API online' + cro : 'API error';
+    el.className = 'text-xs px-3 py-1 rounded-full ' + (ok ? 'bg-green-900 text-green-400' : 'bg-red-900 text-red-400');
   }).catch(() => {
     const el = document.getElementById('apiStatus');
     el.textContent = 'API offline';
@@ -298,14 +300,16 @@ function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').re
 
 function croSummaryHtml(idx) {
   const r = results[urls[idx].url] || {};
+  if (r.status !== 'done') return '&mdash;';
   const cro = r.cro_audit;
-  if (!cro) return r.status === 'done' ? '<span class="text-slate-500 text-xs">No CRO data</span>' : '&mdash;';
+  if (!cro) return '<span class="text-slate-500 text-xs">N/A</span>';
+  if (cro.error) return '<span class="text-red-400 text-xs">Audit error</span>';
   const s = cro.summary || {};
   const high = s.confirmed_high || 0;
   const med  = s.confirmed_medium || 0;
   const gaps = s.gaps_detected || 0;
   if (!high && !med && !gaps) return '<span class="text-green-400 text-xs">&#10003; Clean</span>';
-  return `<button onclick="openCro(${idx})" class="text-left">
+  return `<button onclick="openCro(${idx})" class="text-left hover:opacity-80">
     ${high ? '<span class="cro-badge-high">'+high+' HIGH</span> ' : ''}
     ${med  ? '<span class="cro-badge-medium">'+med+' MED</span> ' : ''}
     ${gaps ? '<span class="cro-badge-gap">'+gaps+' gaps</span>' : ''}
@@ -316,6 +320,7 @@ function buildRowCells(u, i) {
   const r = results[u.url] || {};
   const status = r.status || 'pending';
   const hd = r.hunter_data || null;
+  const hasCro = status === 'done' && r.cro_audit && !r.cro_audit.error;
   const labels = {pending:'Pending', running:'<span class="spinner"></span>Running',
     done:'Done', error:'Error', no_dm:'No Decision Maker'};
   const hasDone = status === 'done';
@@ -325,7 +330,7 @@ function buildRowCells(u, i) {
   const dlHtml = `<button class="dl-btn" ${hasDone?'':'disabled'} onclick="dlHtml(${i})">&#8595; HTML</button>
 <button class="dl-btn" ${hasDone?'':'disabled'} onclick="dlJson(${i})">&#8595; DOM JSON</button>
 <button class="dl-btn" ${hasDone&&r.screenshot_b64?'':'disabled'} onclick="dlScreenshot(${i})">&#8595; Screenshot</button>
-<button class="dl-btn" ${hasDone?'':'disabled'} onclick="dlCro(${i})">&#8595; CRO Report</button>
+<button class="dl-btn" ${hasCro?'':'disabled'} onclick="dlCro(${i})">&#8595; CRO Report</button>
 <button class="dl-btn" ${hasDone||status==='no_dm'?'':'disabled'} onclick="dlContact(${i})">&#8595; Contact</button>`;
   return `
     <td class="px-3 py-3"><input type="checkbox" class="url-check" data-idx="${i}" ${status!=='no_dm'?'checked':''} /></td>
@@ -347,6 +352,7 @@ function updateRow(idx) {
   const r = results[u.url] || {};
   const status = r.status || 'pending';
   const hd = r.hunter_data || null;
+  const hasCro = status === 'done' && r.cro_audit && !r.cro_audit.error;
   const labels = {pending:'Pending', running:'<span class="spinner"></span>Running',
     done:'Done', error:'Error', no_dm:'No Decision Maker'};
   const hasDone = status === 'done';
@@ -369,7 +375,7 @@ function updateRow(idx) {
   if (dl) dl.innerHTML=`<button class="dl-btn" ${hasDone?'':'disabled'} onclick="dlHtml(${idx})">&#8595; HTML</button>
 <button class="dl-btn" ${hasDone?'':'disabled'} onclick="dlJson(${idx})">&#8595; DOM JSON</button>
 <button class="dl-btn" ${hasDone&&r.screenshot_b64?'':'disabled'} onclick="dlScreenshot(${idx})">&#8595; Screenshot</button>
-<button class="dl-btn" ${hasDone?'':'disabled'} onclick="dlCro(${idx})">&#8595; CRO Report</button>
+<button class="dl-btn" ${hasCro?'':'disabled'} onclick="dlCro(${idx})">&#8595; CRO Report</button>
 <button class="dl-btn" ${hasDone||status==='no_dm'?'':'disabled'} onclick="dlContact(${idx})">&#8595; Contact</button>`;
 
   updateStats();
@@ -406,6 +412,7 @@ async function runScraping() {
   running=false;
   document.getElementById('runBtn').disabled=false;
   document.getElementById('runBtn').textContent='▶ Run Scraper';
+  checkApi(); // refresh CRO available status
 }
 
 async function scrapeOne(u) {
@@ -451,11 +458,11 @@ function openCro(idx) {
   document.getElementById('croModalTitle').textContent = 'CRO Audit: ' + urls[idx].url.replace(/^https?:\/\/(www\.)?/,'').substring(0,50);
   const issues = (cro.issues || []).filter(i => i.decision !== 'suppressed');
   const s = cro.summary || {};
-  let html = `<div class="flex gap-4 mb-4 text-xs">
+  let html = `<div class="flex gap-3 mb-5 flex-wrap text-xs">
     <span class="cro-badge-high">${s.confirmed_high||0} HIGH</span>
     <span class="cro-badge-medium">${s.confirmed_medium||0} MEDIUM</span>
     <span class="cro-badge-gap">${s.gaps_detected||0} GAPS</span>
-    <span class="text-slate-400">${s.suppressed||0} suppressed</span>
+    <span class="text-slate-400">${s.suppressed||0} suppressed (false positives removed)</span>
   </div>`;
   issues.forEach(iss => {
     const sevClass = iss.severity === 'high' ? 'sev-high' : iss.severity === 'medium' ? 'sev-medium' : 'sev-low';
@@ -500,7 +507,8 @@ function dlScreenshot(idx) {
   triggerDownload(URL.createObjectURL(new Blob([ab],{type:'image/png'})), slugify(urls[idx].url)+'_screenshot.png');
 }
 function dlCro(idx) {
-  const r=results[urls[idx].url]; if(!r||!r.cro_audit) return;
+  const r=results[urls[idx].url];
+  if(!r || !r.cro_audit || r.cro_audit.error) { alert('No CRO audit data available for this URL. Make sure the backend has the CRO module loaded (check API status shows "+ CRO").'); return; }
   triggerDownload(URL.createObjectURL(new Blob([JSON.stringify(r.cro_audit,null,2)],{type:'application/json'})), slugify(urls[idx].url)+'_cro_audit.json');
 }
 function dlContact(idx) {
@@ -522,7 +530,7 @@ function downloadAll() {
       setTimeout(()=>dlHtml(i),t);
       setTimeout(()=>dlJson(i),t+60);
       if (r.screenshot_b64) setTimeout(()=>dlScreenshot(i),t+120);
-      if (r.cro_audit) setTimeout(()=>dlCro(i),t+160);
+      if (r.cro_audit && !r.cro_audit.error) setTimeout(()=>dlCro(i),t+160);
     }
     if (r.hunter_data&&r.hunter_data.found) setTimeout(()=>dlContact(i),t+180);
   });
@@ -534,12 +542,15 @@ function exportCsv() {
   urls.forEach((u,i)=>{
     const r=results[u.url]||{};
     const hd=r.hunter_data||{};
-    const cro=r.cro_audit||{};
+    const cro=(r.cro_audit&&!r.cro_audit.error)?r.cro_audit:{};
     const cs=cro.summary||{};
     rows.push([i+1,u.url,r.status||'pending',
       hd.first_name||'',hd.last_name||'',hd.title||'',hd.email||'',hd.phone||'',hd.confidence||'',
       r.dom_summary?r.dom_summary.total_elements:'',
-      cs.confirmed_high||'',cs.confirmed_medium||'',cs.gaps_detected||'',r.error||'']);
+      cs.confirmed_high!==undefined?cs.confirmed_high:'',
+      cs.confirmed_medium!==undefined?cs.confirmed_medium:'',
+      cs.gaps_detected!==undefined?cs.gaps_detected:'',
+      r.error||'']);
   });
   const csv=rows.map(r=>r.map(c=>'"'+String(c).replace(/"/g,'""')+'"').join(',')).join('\n');
   const a=document.createElement('a');
