@@ -32,15 +32,17 @@ BASE_URL = os.environ.get("BASE_URL", "https://gtm-production-8ae5.up.railway.ap
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-# Add repo root to path so cro_bots is importable
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if ROOT not in sys.path:
-    sys.path.insert(0, ROOT)
+# cro_bots lives one level up from mcp-web-scraper/
+THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(THIS_DIR)  # parent of mcp-web-scraper/
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
 
 try:
     from cro_bots.cro_audit import run_audit
     from cro_wolf import run_wolf
     CRO_AVAILABLE = True
+    log.info("CRO modules loaded OK")
 except ImportError as e:
     log.warning("CRO modules not available: %s", e)
     CRO_AVAILABLE = False
@@ -233,7 +235,7 @@ def run_cro_audit(html: str, dom_elements: list, industry: str, url: str) -> dic
         final  = run_wolf(report, html, dom_elements, industry=industry)
         return final
     except Exception as exc:
-        log.warning("CRO audit error: %s", exc)
+        log.warning("CRO audit error for %s: %s", url, exc)
         return {"error": str(exc)}
 
 
@@ -271,7 +273,6 @@ async def handle_scrape_api(request: Request):
     result["hunter_data"] = hunter_data
     result["no_decision_maker"] = False
 
-    # Run CRO audit if scrape succeeded
     if not result.get("error") and result.get("html") and CRO_AVAILABLE:
         dom_elements = result.get("dom_states", {}).get("elements", [])
         cro = await loop.run_in_executor(
@@ -321,7 +322,7 @@ async def dispatch(msg: dict):
             cro = await loop.run_in_executor(None, run_cro_audit, result["html"], dom_elements, industry, url)
             if cro and not cro.get("error"):
                 s = cro.get("summary", {})
-                lines += ["", f"CRO Audit: {s.get('confirmed_high',0)} HIGH, {s.get('confirmed_medium',0)} MEDIUM issues, {s.get('gaps_detected',0)} gaps detected"]
+                lines += ["", f"CRO Audit: {s.get('confirmed_high',0)} HIGH, {s.get('confirmed_medium',0)} MEDIUM, {s.get('gaps_detected',0)} gaps"]
                 for iss in (cro.get("issues") or [])[:5]:
                     if iss.get("decision") != "suppressed":
                         lines.append(f"  [{iss.get('severity','?').upper()}] {iss.get('title','')[:80]}")
