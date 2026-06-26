@@ -28,6 +28,13 @@
     .dl-btn:disabled{opacity:.3;cursor:default;}
     .tag-dm { display:inline-block;font-size:10px;padding:2px 6px;border-radius:4px;background:#14532d;color:#4ade80;margin-bottom:3px; }
     .tag-nodm { display:inline-block;font-size:10px;padding:2px 6px;border-radius:4px;background:#431407;color:#fb923c; }
+    .cro-panel { background:#0f172a;border:1px solid #334155;border-radius:8px;padding:12px;margin-top:8px; }
+    .sev-high   { color:#f87171;font-weight:600; }
+    .sev-medium { color:#fbbf24;font-weight:600; }
+    .sev-low    { color:#94a3b8; }
+    .cro-badge-high   { background:#450a0a;color:#f87171;font-size:10px;padding:1px 6px;border-radius:4px; }
+    .cro-badge-medium { background:#422006;color:#fbbf24;font-size:10px;padding:1px 6px;border-radius:4px; }
+    .cro-badge-gap    { background:#1e3a5f;color:#60a5fa;font-size:10px;padding:1px 6px;border-radius:4px; }
   </style>
 </head>
 <body class="min-h-screen">
@@ -43,7 +50,7 @@
 <div class="max-w-screen-2xl mx-auto px-4 py-6 space-y-5">
 
   <!-- Config -->
-  <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+  <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
     <div class="card p-4">
       <label class="block text-xs text-slate-400 mb-1">Backend URL (Railway)</label>
       <input id="apiUrl" type="text" value="https://gtm-production-8ae5.up.railway.app"
@@ -57,6 +64,20 @@
         <input type="checkbox" id="skipHunter" class="rounded" />
         <span class="text-xs text-slate-400">Skip Hunter (scrape all)</span>
       </label>
+    </div>
+    <div class="card p-4">
+      <label class="block text-xs text-slate-400 mb-1">Industry (for CRO audit)</label>
+      <select id="industry" class="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500">
+        <option value="all">All / General</option>
+        <option value="dental">Dental</option>
+        <option value="medical">Medical</option>
+        <option value="local_business">Local Business</option>
+        <option value="booking">Booking / Service</option>
+        <option value="ecommerce">E-commerce</option>
+        <option value="saas">SaaS</option>
+        <option value="restaurant">Restaurant</option>
+        <option value="portfolio">Portfolio</option>
+      </select>
     </div>
     <div class="card p-4">
       <label class="block text-xs text-slate-400 mb-1">Mode</label>
@@ -132,6 +153,7 @@
               <th class="px-3 py-3 text-slate-400 font-medium">Email</th>
               <th class="px-3 py-3 text-slate-400 font-medium">Phone</th>
               <th class="px-3 py-3 text-slate-400 font-medium">Elements</th>
+              <th class="px-3 py-3 text-slate-400 font-medium">CRO Issues</th>
               <th class="px-3 py-3 text-slate-400 font-medium">Screenshot</th>
               <th class="px-3 py-3 text-slate-400 font-medium">Downloads</th>
             </tr>
@@ -147,9 +169,20 @@
   </div>
 </div>
 
-<!-- Modal -->
+<!-- Screenshot Modal -->
 <div id="modal" class="modal-overlay hidden" onclick="closeModal()">
   <img id="modalImg" class="modal-img" src="" alt="Screenshot" onclick="event.stopPropagation()" />
+</div>
+
+<!-- CRO Detail Modal -->
+<div id="croModal" class="modal-overlay hidden" onclick="closeCroModal()">
+  <div class="card" style="max-width:780px;width:92vw;max-height:90vh;overflow-y:auto;padding:24px" onclick="event.stopPropagation()">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-white font-semibold text-base" id="croModalTitle">CRO Audit Report</h2>
+      <button onclick="closeCroModal()" class="text-slate-400 hover:text-white text-lg font-bold">&times;</button>
+    </div>
+    <div id="croModalBody"></div>
+  </div>
 </div>
 
 <script>
@@ -161,6 +194,7 @@ let running = false;
 function apiBase() { return document.getElementById('apiUrl').value.trim().replace(/\/$/, ''); }
 function hunterKey() { return document.getElementById('hunterKey').value.trim(); }
 function skipHunter() { return document.getElementById('skipHunter').checked; }
+function industry() { return document.getElementById('industry').value; }
 
 // API health check
 function checkApi() {
@@ -262,6 +296,22 @@ function phoneHtml(hd) {
 }
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
+function croSummaryHtml(idx) {
+  const r = results[urls[idx].url] || {};
+  const cro = r.cro_audit;
+  if (!cro) return r.status === 'done' ? '<span class="text-slate-500 text-xs">No CRO data</span>' : '&mdash;';
+  const s = cro.summary || {};
+  const high = s.confirmed_high || 0;
+  const med  = s.confirmed_medium || 0;
+  const gaps = s.gaps_detected || 0;
+  if (!high && !med && !gaps) return '<span class="text-green-400 text-xs">&#10003; Clean</span>';
+  return `<button onclick="openCro(${idx})" class="text-left">
+    ${high ? '<span class="cro-badge-high">'+high+' HIGH</span> ' : ''}
+    ${med  ? '<span class="cro-badge-medium">'+med+' MED</span> ' : ''}
+    ${gaps ? '<span class="cro-badge-gap">'+gaps+' gaps</span>' : ''}
+  </button>`;
+}
+
 function buildRowCells(u, i) {
   const r = results[u.url] || {};
   const status = r.status || 'pending';
@@ -275,6 +325,7 @@ function buildRowCells(u, i) {
   const dlHtml = `<button class="dl-btn" ${hasDone?'':'disabled'} onclick="dlHtml(${i})">&#8595; HTML</button>
 <button class="dl-btn" ${hasDone?'':'disabled'} onclick="dlJson(${i})">&#8595; DOM JSON</button>
 <button class="dl-btn" ${hasDone&&r.screenshot_b64?'':'disabled'} onclick="dlScreenshot(${i})">&#8595; Screenshot</button>
+<button class="dl-btn" ${hasDone?'':'disabled'} onclick="dlCro(${i})">&#8595; CRO Report</button>
 <button class="dl-btn" ${hasDone||status==='no_dm'?'':'disabled'} onclick="dlContact(${i})">&#8595; Contact</button>`;
   return `
     <td class="px-3 py-3"><input type="checkbox" class="url-check" data-idx="${i}" ${status!=='no_dm'?'checked':''} /></td>
@@ -285,6 +336,7 @@ function buildRowCells(u, i) {
     <td class="px-3 py-3" id="email-${i}">${emailHtml(hd)}</td>
     <td class="px-3 py-3" id="phone-${i}">${phoneHtml(hd)}</td>
     <td class="px-3 py-3 text-slate-300" id="elems-${i}">${hasDone?(r.dom_summary?r.dom_summary.total_elements:'0'):'&mdash;'}</td>
+    <td class="px-3 py-3" id="cro-${i}" style="min-width:140px">${croSummaryHtml(i)}</td>
     <td class="px-3 py-3" id="thumb-${i}">${thumb}</td>
     <td class="px-3 py-3" id="dl-${i}" style="min-width:120px">${dlHtml}</td>
   `;
@@ -305,6 +357,7 @@ function updateRow(idx) {
   const em = document.getElementById('email-'+idx); if(em) em.innerHTML=emailHtml(hd);
   const ph = document.getElementById('phone-'+idx); if(ph) ph.innerHTML=phoneHtml(hd);
   const el = document.getElementById('elems-'+idx); if(el) el.textContent=hasDone?(r.dom_summary?r.dom_summary.total_elements:'0'):'—';
+  const cr = document.getElementById('cro-'+idx); if(cr) cr.innerHTML=croSummaryHtml(idx);
 
   const th = document.getElementById('thumb-'+idx);
   if (th) {
@@ -316,6 +369,7 @@ function updateRow(idx) {
   if (dl) dl.innerHTML=`<button class="dl-btn" ${hasDone?'':'disabled'} onclick="dlHtml(${idx})">&#8595; HTML</button>
 <button class="dl-btn" ${hasDone?'':'disabled'} onclick="dlJson(${idx})">&#8595; DOM JSON</button>
 <button class="dl-btn" ${hasDone&&r.screenshot_b64?'':'disabled'} onclick="dlScreenshot(${idx})">&#8595; Screenshot</button>
+<button class="dl-btn" ${hasDone?'':'disabled'} onclick="dlCro(${idx})">&#8595; CRO Report</button>
 <button class="dl-btn" ${hasDone||status==='no_dm'?'':'disabled'} onclick="dlContact(${idx})">&#8595; Contact</button>`;
 
   updateStats();
@@ -358,7 +412,7 @@ async function scrapeOne(u) {
   results[u.url]={status:'running'};
   updateRow(u.idx);
   try {
-    const body={url:u.url};
+    const body={url:u.url, industry: industry()};
     if (hunterKey()) body.hunter_api_key=hunterKey();
     if (skipHunter()) body.skip_hunter=true;
     const resp=await fetch(apiBase()+'/scrape',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -380,7 +434,7 @@ function selectAll()  { document.querySelectorAll('.url-check').forEach(cb=>cb.c
 function selectNone() { document.querySelectorAll('.url-check').forEach(cb=>cb.checked=false); }
 function toggleAll(m) { document.querySelectorAll('.url-check').forEach(cb=>cb.checked=m.checked); }
 
-// Modal
+// Screenshot Modal
 function openModal(idx) {
   const r=results[urls[idx].url];
   if(!r||!r.screenshot_b64) return;
@@ -388,6 +442,40 @@ function openModal(idx) {
   document.getElementById('modal').classList.remove('hidden');
 }
 function closeModal() { document.getElementById('modal').classList.add('hidden'); }
+
+// CRO Detail Modal
+function openCro(idx) {
+  const r = results[urls[idx].url];
+  if (!r || !r.cro_audit) return;
+  const cro = r.cro_audit;
+  document.getElementById('croModalTitle').textContent = 'CRO Audit: ' + urls[idx].url.replace(/^https?:\/\/(www\.)?/,'').substring(0,50);
+  const issues = (cro.issues || []).filter(i => i.decision !== 'suppressed');
+  const s = cro.summary || {};
+  let html = `<div class="flex gap-4 mb-4 text-xs">
+    <span class="cro-badge-high">${s.confirmed_high||0} HIGH</span>
+    <span class="cro-badge-medium">${s.confirmed_medium||0} MEDIUM</span>
+    <span class="cro-badge-gap">${s.gaps_detected||0} GAPS</span>
+    <span class="text-slate-400">${s.suppressed||0} suppressed</span>
+  </div>`;
+  issues.forEach(iss => {
+    const sevClass = iss.severity === 'high' ? 'sev-high' : iss.severity === 'medium' ? 'sev-medium' : 'sev-low';
+    const badgeClass = iss.id && iss.id.startsWith('gap_') ? 'cro-badge-gap' : (iss.severity === 'high' ? 'cro-badge-high' : 'cro-badge-medium');
+    const findings = (iss.findings || []).map(f => `<li class="text-slate-300 text-xs mb-1">${esc(f)}</li>`).join('');
+    const fix = iss.fix ? `<div class="mt-2 text-xs text-indigo-300"><strong>Fix:</strong> ${esc(iss.fix)}</div>` : '';
+    html += `<div class="cro-panel mb-3">
+      <div class="flex items-start gap-2 mb-1">
+        <span class="${badgeClass} mt-0.5 shrink-0">${(iss.severity||'medium').toUpperCase()}</span>
+        <span class="${sevClass} text-sm">${esc(iss.title||iss.id)}</span>
+      </div>
+      <ul class="ml-2 mt-1 list-disc list-inside">${findings}</ul>
+      ${fix}
+    </div>`;
+  });
+  if (!issues.length) html += '<p class="text-green-400 text-sm">No confirmed issues found.</p>';
+  document.getElementById('croModalBody').innerHTML = html;
+  document.getElementById('croModal').classList.remove('hidden');
+}
+function closeCroModal() { document.getElementById('croModal').classList.add('hidden'); }
 
 // Downloads
 function slugify(url) {
@@ -411,6 +499,10 @@ function dlScreenshot(idx) {
   for(let i=0;i<b.length;i++) ia[i]=b.charCodeAt(i);
   triggerDownload(URL.createObjectURL(new Blob([ab],{type:'image/png'})), slugify(urls[idx].url)+'_screenshot.png');
 }
+function dlCro(idx) {
+  const r=results[urls[idx].url]; if(!r||!r.cro_audit) return;
+  triggerDownload(URL.createObjectURL(new Blob([JSON.stringify(r.cro_audit,null,2)],{type:'application/json'})), slugify(urls[idx].url)+'_cro_audit.json');
+}
 function dlContact(idx) {
   const r=results[urls[idx].url]; if(!r) return;
   const hd=r.hunter_data||{};
@@ -430,6 +522,7 @@ function downloadAll() {
       setTimeout(()=>dlHtml(i),t);
       setTimeout(()=>dlJson(i),t+60);
       if (r.screenshot_b64) setTimeout(()=>dlScreenshot(i),t+120);
+      if (r.cro_audit) setTimeout(()=>dlCro(i),t+160);
     }
     if (r.hunter_data&&r.hunter_data.found) setTimeout(()=>dlContact(i),t+180);
   });
@@ -437,13 +530,16 @@ function downloadAll() {
 
 // Export CSV
 function exportCsv() {
-  const rows=[['#','URL','Status','First Name','Last Name','Title','Email','Phone','Confidence','Elements','Error']];
+  const rows=[['#','URL','Status','First Name','Last Name','Title','Email','Phone','Confidence','Elements','CRO High','CRO Medium','CRO Gaps','Error']];
   urls.forEach((u,i)=>{
     const r=results[u.url]||{};
     const hd=r.hunter_data||{};
+    const cro=r.cro_audit||{};
+    const cs=cro.summary||{};
     rows.push([i+1,u.url,r.status||'pending',
       hd.first_name||'',hd.last_name||'',hd.title||'',hd.email||'',hd.phone||'',hd.confidence||'',
-      r.dom_summary?r.dom_summary.total_elements:'',r.error||'']);
+      r.dom_summary?r.dom_summary.total_elements:'',
+      cs.confirmed_high||'',cs.confirmed_medium||'',cs.gaps_detected||'',r.error||'']);
   });
   const csv=rows.map(r=>r.map(c=>'"'+String(c).replace(/"/g,'""')+'"').join(',')).join('\n');
   const a=document.createElement('a');
