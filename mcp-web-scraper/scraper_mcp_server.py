@@ -15,7 +15,7 @@ from mcp.types import Tool, TextContent, ImageContent
 from starlette.applications import Starlette
 from starlette.routing import Route, Mount
 from starlette.requests import Request
-from starlette.responses import JSONResponse, RedirectResponse
+from starlette.responses import JSONResponse, RedirectResponse, Response
 import uvicorn
 
 SCRAPINGBEE_API_KEY = os.environ.get("SCRAPINGBEE_API_KEY", "")
@@ -26,18 +26,15 @@ BASE_URL = os.environ.get("BASE_URL", "https://gtm-production-8ae5.up.railway.ap
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 log = logging.getLogger(__name__)
 
-# In-memory token store (sufficient for single-instance Railway deploy)
-_tokens: set = set()
+TAGS = ['a','button','h1','h2','h3','h4','h5','h6','img','input','form','label','section','header','footer']
 
 COORDINATE_JS = (
-    "const elements=Array.from(document.querySelectorAll('a,button,h1,h2,h3,h4,h5,h6,img,input,form,label,section,header,footer'))"
-    ".map(el=>{const r=el.getBoundingClientRect();return{tag:el.tagName.toLowerCase(),"
+    "const el=Array.from(document.querySelectorAll('a,button,h1,h2,h3,h4,h5,h6,img,input,form,label,section,header,footer'))"
+    ".map(e=>{const r=e.getBoundingClientRect();return{tag:e.tagName.toLowerCase(),"
     "x:r.left+window.scrollX,y:r.top+window.scrollY,width:r.width,height:r.height};});"
     "const c=document.createElement('div');c.id='scrapingbee-live-dom-matrices';"
-    "c.style.display='none';c.innerText=JSON.stringify(elements);document.body.appendChild(c);"
+    "c.style.display='none';c.innerText=JSON.stringify(el);document.body.appendChild(c);"
 )
-
-TAGS = ['a','button','h1','h2','h3','h4','h5','h6','img','input','form','label','section','header','footer']
 
 
 def safe_folder(url):
@@ -89,9 +86,12 @@ def scrape_sync(url):
         container = soup.find(id="scrapingbee-live-dom-matrices")
         live_elements = []
         if container and container.text:
-            live_elements = json.loads(container.text)
-            container.decompose()
-            html = str(soup)
+            try:
+                live_elements = json.loads(container.text)
+                container.decompose()
+                html = str(soup)
+            except Exception:
+                pass
         html_path = os.path.join(folder, "full_rendered_inlined.html")
         with open(html_path, "w", encoding="utf-8") as f:
             f.write(html)
@@ -122,7 +122,7 @@ def scrape_sync(url):
     return result
 
 
-# ── MCP Server ───────────────────────────────────────────────────────────
+# ── MCP Server ────────────────────────────────────────────────────────────────
 
 mcp_app = Server("web-scraper")
 
@@ -131,11 +131,7 @@ mcp_app = Server("web-scraper")
 async def list_tools():
     return [Tool(
         name="scrape_website",
-        description=(
-            "Scrapes a website using a real headless browser (ScrapingBee). "
-            "Returns fully rendered HTML, DOM states JSON with bounding boxes, "
-            "and a full-page PNG screenshot."
-        ),
+        description="Scrapes a website: returns rendered HTML, DOM states JSON with bounding boxes, and a full-page screenshot.",
         inputSchema={"type": "object",
                      "properties": {"url": {"type": "string", "description": "Full URL to scrape"}},
                      "required": ["url"]},
@@ -155,13 +151,11 @@ async def call_tool(name, arguments):
         return [TextContent(type="text", text=f"Scrape failed: {result['error']}")]
     lines = [
         f"Scrape complete for: {url}", "",
-        f"DOM summary: {result['dom_summary']['total_elements']} elements extracted.", "",
-        "Sample elements (first 5):",
-        json.dumps(result["dom_summary"]["sample"], indent=2), "",
-        "Files saved:",
-        f"  • {result['html_path']}",
-        f"  • {result['dom_states_path']}",
-        f"  • {result.get('screenshot_path') or 'screenshot not captured'}",
+        f"DOM: {result['dom_summary']['total_elements']} elements extracted.", "",
+        "Sample (first 5):", json.dumps(result["dom_summary"]["sample"], indent=2), "",
+        f"HTML: {result['html_path']}",
+        f"DOM JSON: {result['dom_states_path']}",
+        f"Screenshot: {result.get('screenshot_path') or 'not captured'}",
     ]
     content = [TextContent(type="text", text="\n".join(lines))]
     if result.get("screenshot_b64"):
@@ -169,21 +163,25 @@ async def call_tool(name, arguments):
     return content
 
 
-# ── SSE transport ──────────────────────────────────────────────────────────────
+# ── SSE transport ─────────────────────────────────────────────────────────────
 
 sse_transport = SseServerTransport("/messages/")
 
 
 async def handle_sse(request: Request):
-    async with sse_transport.connect_sse(request.scope, request.receive, request._send) as streams:
+    async with sse_transport.connect_sse(
+        request.scope, request.receive, request._send
+    ) as streams:
         await mcp_app.run(streams[0], streams[1], mcp_app.create_initialization_options())
 
 
 async def handle_messages(request: Request):
-    await sse_transport.handle_post_message(request.scope, request.receive, request._send)
+    await sse_transport.handle_post_message(
+        request.scope, request.receive, request._send
+    )
 
 
-# ── OAuth endpoints (required by Claude.ai) ──────────────────────────────────
+# ── OAuth 2.0 endpoints (required by Claude.ai) ───────────────────────────────
 
 async def oauth_protected_resource(request: Request):
     return JSONResponse({
@@ -205,22 +203,18 @@ async def oauth_authorization_server(request: Request):
 
 
 async def oauth_authorize(request: Request):
-    """Auto-approve: redirect straight back with a code."""
     params = dict(request.query_params)
     redirect_uri = params.get("redirect_uri", "")
     state = params.get("state", "")
     code = secrets.token_urlsafe(32)
-    _tokens.add(code)  # reuse set as code store
-    qs = urlencode({"code": code, "state": state})
-    return RedirectResponse(url=f"{redirect_uri}?{qs}", status_code=302)
+    qs = urlencode({k: v for k, v in [("code", code), ("state", state)] if v})
+    target = f"{redirect_uri}?{qs}" if redirect_uri else "/"
+    return RedirectResponse(url=target, status_code=302)
 
 
 async def oauth_token(request: Request):
-    """Exchange any code for a bearer token."""
-    token = secrets.token_urlsafe(32)
-    _tokens.add(token)
     return JSONResponse({
-        "access_token": token,
+        "access_token": secrets.token_urlsafe(32),
         "token_type": "bearer",
         "expires_in": 86400,
     })
@@ -230,14 +224,14 @@ async def healthcheck(request: Request):
     return JSONResponse({"status": "ok", "server": "web-scraper MCP"})
 
 
-# ── App ────────────────────────────────────────────────────────────────────
+# ── App ───────────────────────────────────────────────────────────────────────
 
 web = Starlette(routes=[
     Route("/", healthcheck),
     Route("/.well-known/oauth-protected-resource", oauth_protected_resource),
     Route("/.well-known/oauth-authorization-server", oauth_authorization_server),
     Route("/oauth/authorize", oauth_authorize),
-    Route("/oauth/token", oauth_token, methods=["POST"]),
+    Route("/oauth/token", oauth_token, methods=["GET", "POST"]),
     Route("/sse", handle_sse),
     Mount("/messages/", app=handle_messages),
 ])
