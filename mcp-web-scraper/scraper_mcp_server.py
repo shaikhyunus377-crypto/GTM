@@ -9,13 +9,12 @@ from urllib.parse import urlparse, urlencode
 
 from bs4 import BeautifulSoup
 from scrapingbee import ScrapingBeeClient
-from mcp.server import Server
-from mcp.server.sse import SseServerTransport
-from mcp.types import Tool, TextContent, ImageContent
+from mcp.server.fastmcp import FastMCP
 from starlette.applications import Starlette
 from starlette.routing import Route, Mount
 from starlette.requests import Request
-from starlette.responses import JSONResponse, RedirectResponse, Response
+from starlette.responses import JSONResponse, RedirectResponse
+from starlette.middleware.cors import CORSMiddleware
 import uvicorn
 
 SCRAPINGBEE_API_KEY = os.environ.get("SCRAPINGBEE_API_KEY", "")
@@ -122,66 +121,35 @@ def scrape_sync(url):
     return result
 
 
-# ── MCP Server ────────────────────────────────────────────────────────────────
+# ── FastMCP server (handles streamable HTTP at /mcp) ───────────────────────────
 
-mcp_app = Server("web-scraper")
-
-
-@mcp_app.list_tools()
-async def list_tools():
-    return [Tool(
-        name="scrape_website",
-        description="Scrapes a website: returns rendered HTML, DOM states JSON with bounding boxes, and a full-page screenshot.",
-        inputSchema={"type": "object",
-                     "properties": {"url": {"type": "string", "description": "Full URL to scrape"}},
-                     "required": ["url"]},
-    )]
+fmcp = FastMCP("web-scraper")
 
 
-@mcp_app.call_tool()
-async def call_tool(name, arguments):
-    if name != "scrape_website":
-        raise ValueError(f"Unknown tool: {name}")
-    url = arguments.get("url", "").strip()
+@fmcp.tool()
+async def scrape_website(url: str) -> str:
+    """Scrapes a website using a real headless browser. Returns rendered HTML, DOM element states with bounding boxes, and a full-page screenshot."""
     if not url.startswith("http"):
-        return [TextContent(type="text", text="Error: URL must start with http:// or https://")]
+        return "Error: URL must start with http:// or https://"
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(None, scrape_sync, url)
     if result.get("error"):
-        return [TextContent(type="text", text=f"Scrape failed: {result['error']}")]
-    lines = [
-        f"Scrape complete for: {url}", "",
-        f"DOM: {result['dom_summary']['total_elements']} elements extracted.", "",
-        "Sample (first 5):", json.dumps(result["dom_summary"]["sample"], indent=2), "",
-        f"HTML: {result['html_path']}",
+        return f"Scrape failed: {result['error']}"
+    return "\n".join([
+        f"Scrape complete: {url}",
+        f"DOM elements: {result['dom_summary']['total_elements']} extracted",
+        f"Sample: {json.dumps(result['dom_summary']['sample'][:3], indent=2)}",
+        f"HTML saved: {result['html_path']}",
         f"DOM JSON: {result['dom_states_path']}",
         f"Screenshot: {result.get('screenshot_path') or 'not captured'}",
-    ]
-    content = [TextContent(type="text", text="\n".join(lines))]
-    if result.get("screenshot_b64"):
-        content.append(ImageContent(type="image", data=result["screenshot_b64"], mimeType="image/png"))
-    return content
+    ])
 
 
-# ── SSE transport ─────────────────────────────────────────────────────────────
-
-sse_transport = SseServerTransport("/messages/")
-
-
-async def handle_sse(request: Request):
-    async with sse_transport.connect_sse(
-        request.scope, request.receive, request._send
-    ) as streams:
-        await mcp_app.run(streams[0], streams[1], mcp_app.create_initialization_options())
+# Get the streamable HTTP ASGI app from FastMCP (mounts at /mcp)
+mcp_asgi = fmcp.streamable_http_app()
 
 
-async def handle_messages(request: Request):
-    await sse_transport.handle_post_message(
-        request.scope, request.receive, request._send
-    )
-
-
-# ── OAuth 2.0 endpoints (required by Claude.ai) ───────────────────────────────
+# ── OAuth 2.0 (required by Claude.ai) ──────────────────────────────────────────
 
 async def oauth_protected_resource(request: Request):
     return JSONResponse({
@@ -221,10 +189,10 @@ async def oauth_token(request: Request):
 
 
 async def healthcheck(request: Request):
-    return JSONResponse({"status": "ok", "server": "web-scraper MCP"})
+    return JSONResponse({"status": "ok", "server": "web-scraper MCP", "mcp_endpoint": "/mcp"})
 
 
-# ── App ───────────────────────────────────────────────────────────────────────
+# ── Starlette app ─────────────────────────────────────────────────────────────────
 
 web = Starlette(routes=[
     Route("/", healthcheck),
@@ -232,9 +200,17 @@ web = Starlette(routes=[
     Route("/.well-known/oauth-authorization-server", oauth_authorization_server),
     Route("/oauth/authorize", oauth_authorize),
     Route("/oauth/token", oauth_token, methods=["GET", "POST"]),
-    Route("/sse", handle_sse),
-    Mount("/messages/", app=handle_messages),
+    Mount("/", app=mcp_asgi),
 ])
+
+# CORS — required for Claude.ai web (browser makes cross-origin requests)
+web.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+    allow_credentials=False,
+)
 
 if __name__ == "__main__":
     uvicorn.run(web, host="0.0.0.0", port=PORT)
