@@ -7,31 +7,31 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
   <style>
-    body { background: #0f172a; color: #e2e8f0; font-family: system-ui, sans-serif; }
-    .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; }
-    .drop-zone { border: 2px dashed #475569; transition: all 0.2s; }
-    .drop-zone.drag-over { border-color: #6366f1; background: #1e1b4b; }
-    .status-pending { color: #94a3b8; }
-    .status-running { color: #fbbf24; }
-    .status-done    { color: #34d399; }
-    .status-error   { color: #f87171; }
-    .progress-bar { transition: width 0.4s ease; }
-    ::-webkit-scrollbar { width: 6px; }
-    ::-webkit-scrollbar-track { background: #1e293b; }
-    ::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
-    .thumb-img { width: 72px; height: 46px; object-fit: cover; border-radius: 4px; cursor: pointer; border: 1px solid #475569; }
+    body { background:#0f172a; color:#e2e8f0; font-family:system-ui,sans-serif; }
+    .card { background:#1e293b; border:1px solid #334155; border-radius:12px; }
+    .drop-zone { border:2px dashed #475569; transition:all .2s; }
+    .drop-zone.drag-over { border-color:#6366f1; background:#1e1b4b; }
+    .status-pending  { color:#94a3b8; }
+    .status-running  { color:#fbbf24; }
+    .status-done     { color:#34d399; }
+    .status-error    { color:#f87171; }
+    .status-no_dm    { color:#fb923c; }
+    .progress-bar { transition:width .4s ease; }
+    ::-webkit-scrollbar{width:6px} ::-webkit-scrollbar-track{background:#1e293b} ::-webkit-scrollbar-thumb{background:#475569;border-radius:3px}
+    .thumb-img { width:80px;height:52px;object-fit:cover;border-radius:4px;cursor:pointer;border:1px solid #475569; }
     .modal-overlay { position:fixed;inset:0;background:rgba(0,0,0,.88);z-index:1000;display:flex;align-items:center;justify-content:center; }
-    .modal-img { max-width:90vw;max-height:90vh;border-radius:8px; }
+    .modal-img { max-width:92vw;max-height:92vh;border-radius:8px; }
     .spinner { border:2px solid #334155;border-top-color:#6366f1;border-radius:50%;width:14px;height:14px;animation:spin .7s linear infinite;display:inline-block;vertical-align:middle;margin-right:5px; }
-    @keyframes spin { to { transform:rotate(360deg); } }
-    .dl-btn { font-size:11px;padding:3px 8px;border-radius:5px;cursor:pointer;border:1px solid #475569;background:#0f172a;color:#94a3b8;white-space:nowrap; }
-    .dl-btn:hover { background:#1e293b;color:#e2e8f0; }
-    .dl-btn:disabled { opacity:0.35;cursor:default; }
+    @keyframes spin{to{transform:rotate(360deg)}}
+    .dl-btn { font-size:11px;padding:3px 8px;border-radius:5px;cursor:pointer;border:1px solid #475569;background:#0f172a;color:#94a3b8;white-space:nowrap;display:block;width:100%;text-align:left;margin-bottom:3px; }
+    .dl-btn:hover:not(:disabled){background:#1e293b;color:#e2e8f0;}
+    .dl-btn:disabled{opacity:.3;cursor:default;}
+    .tag-dm { display:inline-block;font-size:10px;padding:2px 6px;border-radius:4px;background:#14532d;color:#4ade80;margin-bottom:3px; }
+    .tag-nodm { display:inline-block;font-size:10px;padding:2px 6px;border-radius:4px;background:#431407;color:#fb923c; }
   </style>
 </head>
 <body class="min-h-screen">
 
-<!-- Header -->
 <div class="px-6 py-4 border-b border-slate-700 flex items-center justify-between">
   <div class="flex items-center gap-3">
     <div class="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white font-bold text-sm">S</div>
@@ -40,14 +40,23 @@
   <div id="apiStatus" class="text-xs px-3 py-1 rounded-full bg-slate-700 text-slate-400">Checking API...</div>
 </div>
 
-<div class="max-w-7xl mx-auto px-4 py-6 space-y-5">
+<div class="max-w-screen-2xl mx-auto px-4 py-6 space-y-5">
 
   <!-- Config -->
-  <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+  <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
     <div class="card p-4">
-      <label class="block text-xs text-slate-400 mb-1">Backend URL</label>
+      <label class="block text-xs text-slate-400 mb-1">Backend URL (Railway)</label>
       <input id="apiUrl" type="text" value="https://gtm-production-8ae5.up.railway.app"
         class="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500" />
+    </div>
+    <div class="card p-4">
+      <label class="block text-xs text-slate-400 mb-1">Hunter.io API Key</label>
+      <input id="hunterKey" type="password" placeholder="Enter your Hunter.io API key"
+        class="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500" />
+      <label class="flex items-center gap-2 mt-2 cursor-pointer">
+        <input type="checkbox" id="skipHunter" class="rounded" />
+        <span class="text-xs text-slate-400">Skip Hunter (scrape all)</span>
+      </label>
     </div>
     <div class="card p-4">
       <label class="block text-xs text-slate-400 mb-1">Mode</label>
@@ -71,23 +80,31 @@
     ondrop="handleDrop(event)">
     <div class="text-4xl mb-3">&#128194;</div>
     <p class="text-white font-medium">Drop Excel / CSV file here or click to browse</p>
-    <p class="text-slate-400 text-sm mt-1">Supports .xlsx, .xls, .csv &mdash; URLs auto-detected from any column</p>
+    <p class="text-slate-400 text-sm mt-1">Supports .xlsx .xls .csv &mdash; URLs auto-detected from any column</p>
     <input id="fileInput" type="file" accept=".xlsx,.xls,.csv" class="hidden" onchange="handleFile(this.files[0])" />
   </div>
 
-  <!-- URL section -->
+  <!-- URL Section -->
   <div id="urlSection" class="hidden">
-    <div class="flex items-center justify-between mb-3">
+    <div class="flex flex-wrap items-center justify-between gap-3 mb-3">
       <div>
         <h2 class="text-white font-semibold" id="urlHeading">URLs detected</h2>
         <p class="text-slate-400 text-xs mt-0.5" id="urlSubheading"></p>
       </div>
-      <div class="flex gap-2 flex-wrap justify-end">
-        <button onclick="selectAll()"  class="text-xs px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300">Select all</button>
-        <button onclick="selectNone()" class="text-xs px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300">Deselect all</button>
-        <button onclick="downloadAll()" class="text-xs px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300">&#8595; Download all</button>
-        <button id="runBtn" onclick="runScraping()" class="px-5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium">Run Scraper</button>
+      <div class="flex gap-2 flex-wrap">
+        <button onclick="selectAll()"   class="text-xs px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300">Select all</button>
+        <button onclick="selectNone()"  class="text-xs px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300">Deselect all</button>
+        <button onclick="downloadAll()" class="text-xs px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300">&#8595; Download all done</button>
+        <button id="runBtn" onclick="runScraping()" class="px-5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium">&#9654; Run Scraper</button>
       </div>
+    </div>
+
+    <!-- Stats bar -->
+    <div id="statsBar" class="hidden flex gap-4 mb-4 text-xs">
+      <span class="text-slate-400">Total: <span id="statTotal" class="text-white font-semibold">0</span></span>
+      <span class="text-green-400">Done: <span id="statDone" class="font-semibold">0</span></span>
+      <span class="text-orange-400">No DM: <span id="statNoDm" class="font-semibold">0</span></span>
+      <span class="text-red-400">Error: <span id="statError" class="font-semibold">0</span></span>
     </div>
 
     <!-- Progress -->
@@ -107,13 +124,16 @@
         <table class="w-full text-sm">
           <thead>
             <tr class="border-b border-slate-700 text-left">
-              <th class="px-4 py-3 w-8"><input type="checkbox" id="checkAll" onchange="toggleAll(this)" /></th>
-              <th class="px-4 py-3 text-slate-400 font-medium">#</th>
-              <th class="px-4 py-3 text-slate-400 font-medium">URL</th>
-              <th class="px-4 py-3 text-slate-400 font-medium">Status</th>
-              <th class="px-4 py-3 text-slate-400 font-medium">Elements</th>
-              <th class="px-4 py-3 text-slate-400 font-medium">Screenshot</th>
-              <th class="px-4 py-3 text-slate-400 font-medium">Downloads</th>
+              <th class="px-3 py-3 w-8"><input type="checkbox" id="checkAll" onchange="toggleAll(this)" /></th>
+              <th class="px-3 py-3 text-slate-400 font-medium">#</th>
+              <th class="px-3 py-3 text-slate-400 font-medium">URL</th>
+              <th class="px-3 py-3 text-slate-400 font-medium">Status</th>
+              <th class="px-3 py-3 text-slate-400 font-medium">Decision Maker</th>
+              <th class="px-3 py-3 text-slate-400 font-medium">Email</th>
+              <th class="px-3 py-3 text-slate-400 font-medium">Phone</th>
+              <th class="px-3 py-3 text-slate-400 font-medium">Elements</th>
+              <th class="px-3 py-3 text-slate-400 font-medium">Screenshot</th>
+              <th class="px-3 py-3 text-slate-400 font-medium">Downloads</th>
             </tr>
           </thead>
           <tbody id="urlTableBody"></tbody>
@@ -122,10 +142,9 @@
     </div>
 
     <div class="flex justify-end mt-3">
-      <button onclick="exportCsv()" class="text-xs px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300">Export results CSV</button>
+      <button onclick="exportCsv()" class="text-xs px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300">&#8595; Export CSV</button>
     </div>
   </div>
-
 </div>
 
 <!-- Modal -->
@@ -139,13 +158,16 @@ let urls = [];
 let results = {};
 let running = false;
 
-// API health
+function apiBase() { return document.getElementById('apiUrl').value.trim().replace(/\/$/, ''); }
+function hunterKey() { return document.getElementById('hunterKey').value.trim(); }
+function skipHunter() { return document.getElementById('skipHunter').checked; }
+
+// API health check
 function checkApi() {
-  const base = apiBase();
-  fetch(base + '/').then(r => r.json()).then(d => {
+  fetch(apiBase() + '/').then(r => r.json()).then(d => {
     const el = document.getElementById('apiStatus');
     el.textContent = d.status === 'ok' ? 'API online' : 'API error';
-    el.className = 'text-xs px-3 py-1 rounded-full ' + (d.status === 'ok' ? 'bg-green-900 text-green-400' : 'bg-red-900 text-red-400');
+    el.className = 'text-xs px-3 py-1 rounded-full ' + (d.status==='ok' ? 'bg-green-900 text-green-400' : 'bg-red-900 text-red-400');
   }).catch(() => {
     const el = document.getElementById('apiStatus');
     el.textContent = 'API offline';
@@ -155,12 +177,10 @@ function checkApi() {
 document.getElementById('apiUrl').addEventListener('change', checkApi);
 checkApi();
 
-function apiBase() { return document.getElementById('apiUrl').value.trim().replace(/\/$/, ''); }
-
 function setMode(m) {
   mode = m;
-  document.getElementById('btnSeq').className = 'flex-1 py-2 rounded-lg text-sm font-medium ' + (m==='sequential' ? 'bg-indigo-600 text-white' : 'bg-slate-700 text-slate-300');
-  document.getElementById('btnPar').className = 'flex-1 py-2 rounded-lg text-sm font-medium ' + (m==='parallel'   ? 'bg-indigo-600 text-white' : 'bg-slate-700 text-slate-300');
+  document.getElementById('btnSeq').className = 'flex-1 py-2 rounded-lg text-sm font-medium ' + (m==='sequential'?'bg-indigo-600 text-white':'bg-slate-700 text-slate-300');
+  document.getElementById('btnPar').className = 'flex-1 py-2 rounded-lg text-sm font-medium ' + (m==='parallel'?'bg-indigo-600 text-white':'bg-slate-700 text-slate-300');
 }
 
 // File handling
@@ -179,26 +199,37 @@ function handleFile(file) {
   };
   reader.readAsBinaryString(file);
 }
-function isUrl(v) { return typeof v === 'string' && (v.startsWith('http://') || v.startsWith('https://')); }
+function isUrl(v) { return typeof v==='string' && (v.startsWith('http://') || v.startsWith('https://')); }
 function processRows(rows, filename) {
   if (!rows.length) { alert('File is empty.'); return; }
   const urlCols = [];
   rows[0].forEach((h, i) => {
     let n = 0;
-    for (let r = 1; r < Math.min(rows.length, 11); r++) if (isUrl(rows[r][i])) n++;
+    for (let r=1; r<Math.min(rows.length,11); r++) if (isUrl(rows[r][i])) n++;
     if (n > 0) urlCols.push(i);
   });
   urls = [];
   const seen = new Set();
-  const add = v => { v = v.trim(); if (!seen.has(v)) { seen.add(v); urls.push({url:v, idx:urls.length}); } };
-  if (urlCols.length) rows.slice(1).forEach(row => urlCols.forEach(ci => { if (isUrl(row[ci])) add(row[ci]); }));
-  else rows.slice(1).forEach(row => row.forEach(cell => { if (isUrl(cell)) add(cell); }));
-  urls.forEach((u,i) => u.idx = i);
+  const add = v => { v=v.trim(); if (!seen.has(v)){seen.add(v); urls.push({url:v,idx:urls.length});} };
+  if (urlCols.length) rows.slice(1).forEach(row => urlCols.forEach(ci => { if(isUrl(row[ci])) add(row[ci]); }));
+  else rows.slice(1).forEach(row => row.forEach(cell => { if(isUrl(cell)) add(cell); }));
+  urls.forEach((u,i) => u.idx=i);
   results = {};
   document.getElementById('urlSection').classList.remove('hidden');
   document.getElementById('urlHeading').textContent = urls.length + ' URL' + (urls.length!==1?'s':'') + ' found';
   document.getElementById('urlSubheading').textContent = 'From: ' + filename;
   renderTable();
+  updateStats();
+}
+
+// Stats
+function updateStats() {
+  const vals = Object.values(results);
+  document.getElementById('statsBar').classList.remove('hidden');
+  document.getElementById('statTotal').textContent  = urls.length;
+  document.getElementById('statDone').textContent   = vals.filter(r=>r.status==='done').length;
+  document.getElementById('statNoDm').textContent   = vals.filter(r=>r.status==='no_dm').length;
+  document.getElementById('statError').textContent  = vals.filter(r=>r.status==='error').length;
 }
 
 // Table
@@ -206,37 +237,56 @@ function renderTable() {
   const tbody = document.getElementById('urlTableBody');
   tbody.innerHTML = '';
   urls.forEach((u,i) => {
-    const row = document.createElement('tr');
-    row.id = 'row-' + i;
-    row.className = 'border-b border-slate-800 hover:bg-slate-800/30';
-    row.innerHTML = rowHtml(u, i);
-    tbody.appendChild(row);
+    const tr = document.createElement('tr');
+    tr.id = 'row-' + i;
+    tr.className = 'border-b border-slate-800 hover:bg-slate-800/30';
+    tr.innerHTML = buildRowCells(u, i);
+    tbody.appendChild(tr);
   });
 }
 
-function rowHtml(u, i) {
+function dmHtml(hd) {
+  if (!hd) return '<span class="text-slate-600">&mdash;</span>';
+  if (!hd.found) return '<span class="tag-nodm">No DM</span><br><span class="text-slate-500 text-xs">' + (hd.error||'') + '</span>';
+  const name = [hd.first_name, hd.last_name].filter(Boolean).join(' ') || '&mdash;';
+  const title = hd.title ? '<br><span class="text-slate-400 text-xs">' + esc(hd.title) + '</span>' : '';
+  return '<span class="tag-dm">&#10003; DM Found</span><br><span class="text-white text-xs font-medium">' + esc(name) + '</span>' + title;
+}
+function emailHtml(hd) {
+  if (!hd || !hd.found || !hd.email) return '<span class="text-slate-600">&mdash;</span>';
+  return '<a href="mailto:' + esc(hd.email) + '" class="text-indigo-400 hover:underline text-xs">' + esc(hd.email) + '</a>';
+}
+function phoneHtml(hd) {
+  if (!hd || !hd.found || !hd.phone) return '<span class="text-slate-600">&mdash;</span>';
+  return '<span class="text-slate-300 text-xs">' + esc(hd.phone) + '</span>';
+}
+function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+function buildRowCells(u, i) {
   const r = results[u.url] || {};
   const status = r.status || 'pending';
-  const labels = {pending:'Pending', running:'<span class="spinner"></span>Running', done:'Done', error:'Error'};
-  const thumb = r.screenshot_b64
-    ? `<img class="thumb-img" src="data:image/png;base64,${r.screenshot_b64}" onclick="openModal('${i}')" title="Click to enlarge" />`
-    : (status==='done' ? '<span class="text-slate-500 text-xs">None</span>' : '&mdash;');
+  const hd = r.hunter_data || null;
+  const labels = {pending:'Pending', running:'<span class="spinner"></span>Running',
+    done:'Done', error:'Error', no_dm:'No Decision Maker'};
   const hasDone = status === 'done';
-  const slug = r.slug || slugify(u.url);
-  const dlHtml = `
-    <div class="flex flex-col gap-1">
-      <button class="dl-btn" ${hasDone?'':'disabled'} onclick="dlHtml(${i})">&#8595; HTML</button>
-      <button class="dl-btn" ${hasDone?'':'disabled'} onclick="dlJson(${i})">&#8595; DOM JSON</button>
-      <button class="dl-btn" ${hasDone&&r.screenshot_b64?'':'disabled'} onclick="dlScreenshot(${i})">&#8595; Screenshot</button>
-    </div>`;
+  const thumb = r.screenshot_b64
+    ? '<img class="thumb-img" src="data:image/png;base64,'+r.screenshot_b64+'" onclick="openModal('+i+')" title="Click to enlarge" />'
+    : (hasDone ? '<span class="text-slate-500 text-xs">None</span>' : '&mdash;');
+  const dlHtml = `<button class="dl-btn" ${hasDone?'':'disabled'} onclick="dlHtml(${i})">&#8595; HTML</button>
+<button class="dl-btn" ${hasDone?'':'disabled'} onclick="dlJson(${i})">&#8595; DOM JSON</button>
+<button class="dl-btn" ${hasDone&&r.screenshot_b64?'':'disabled'} onclick="dlScreenshot(${i})">&#8595; Screenshot</button>
+<button class="dl-btn" ${hasDone||status==='no_dm'?'':'disabled'} onclick="dlContact(${i})">&#8595; Contact</button>`;
   return `
-    <td class="px-4 py-3"><input type="checkbox" class="url-check" data-idx="${i}" checked /></td>
-    <td class="px-4 py-3 text-slate-400">${i+1}</td>
-    <td class="px-4 py-3 max-w-xs"><a href="${u.url}" target="_blank" class="text-indigo-400 hover:underline text-xs break-all">${u.url}</a></td>
-    <td class="px-4 py-3 status-${status} text-xs" id="status-${i}">${labels[status]||'Pending'}${r.error?'<br><span class="text-red-400">'+r.error.substring(0,70)+'</span>':''}</td>
-    <td class="px-4 py-3 text-slate-300" id="elems-${i}">${hasDone?(r.dom_summary?r.dom_summary.total_elements:'0'):'&mdash;'}</td>
-    <td class="px-4 py-3" id="thumb-${i}">${thumb}</td>
-    <td class="px-4 py-3" id="dl-${i}">${dlHtml}</td>
+    <td class="px-3 py-3"><input type="checkbox" class="url-check" data-idx="${i}" ${status!=='no_dm'?'checked':''} /></td>
+    <td class="px-3 py-3 text-slate-400">${i+1}</td>
+    <td class="px-3 py-3" style="min-width:160px;max-width:220px"><a href="${u.url}" target="_blank" class="text-indigo-400 hover:underline text-xs break-all">${esc(u.url)}</a></td>
+    <td class="px-3 py-3 status-${status} text-xs" id="status-${i}">${labels[status]||'Pending'}${r.error?'<br><span class="text-red-400 text-xs">'+esc(r.error.substring(0,60))+'</span>':''}</td>
+    <td class="px-3 py-3" id="dm-${i}" style="min-width:160px">${dmHtml(hd)}</td>
+    <td class="px-3 py-3" id="email-${i}">${emailHtml(hd)}</td>
+    <td class="px-3 py-3" id="phone-${i}">${phoneHtml(hd)}</td>
+    <td class="px-3 py-3 text-slate-300" id="elems-${i}">${hasDone?(r.dom_summary?r.dom_summary.total_elements:'0'):'&mdash;'}</td>
+    <td class="px-3 py-3" id="thumb-${i}">${thumb}</td>
+    <td class="px-3 py-3" id="dl-${i}" style="min-width:120px">${dlHtml}</td>
   `;
 }
 
@@ -244,141 +294,161 @@ function updateRow(idx) {
   const u = urls[idx];
   const r = results[u.url] || {};
   const status = r.status || 'pending';
-  const labels = {pending:'Pending', running:'<span class="spinner"></span>Running', done:'Done', error:'Error'};
-  const row = document.getElementById('row-' + idx);
-  if (!row) return;
+  const hd = r.hunter_data || null;
+  const labels = {pending:'Pending', running:'<span class="spinner"></span>Running',
+    done:'Done', error:'Error', no_dm:'No Decision Maker'};
   const hasDone = status === 'done';
 
-  document.getElementById('status-' + idx).className = 'px-4 py-3 status-' + status + ' text-xs';
-  document.getElementById('status-' + idx).innerHTML = (labels[status]||'Pending') + (r.error ? '<br><span class="text-red-400">' + r.error.substring(0,70) + '</span>' : '');
-  document.getElementById('elems-' + idx).textContent = hasDone ? (r.dom_summary ? r.dom_summary.total_elements : '0') : '—';
+  const sc = document.getElementById('status-'+idx);
+  if (sc) { sc.className='px-3 py-3 status-'+status+' text-xs'; sc.innerHTML=(labels[status]||'Pending')+(r.error?'<br><span class="text-red-400 text-xs">'+esc(r.error.substring(0,60))+'</span>':''); }
+  const dm = document.getElementById('dm-'+idx); if(dm) dm.innerHTML=dmHtml(hd);
+  const em = document.getElementById('email-'+idx); if(em) em.innerHTML=emailHtml(hd);
+  const ph = document.getElementById('phone-'+idx); if(ph) ph.innerHTML=phoneHtml(hd);
+  const el = document.getElementById('elems-'+idx); if(el) el.textContent=hasDone?(r.dom_summary?r.dom_summary.total_elements:'0'):'—';
 
-  if (r.screenshot_b64) {
-    document.getElementById('thumb-' + idx).innerHTML = '<img class="thumb-img" src="data:image/png;base64,' + r.screenshot_b64 + '" onclick="openModal(' + idx + ')" title="Click to enlarge" />';
-  } else if (hasDone) {
-    document.getElementById('thumb-' + idx).innerHTML = '<span class="text-slate-500 text-xs">None</span>';
+  const th = document.getElementById('thumb-'+idx);
+  if (th) {
+    if (r.screenshot_b64) th.innerHTML='<img class="thumb-img" src="data:image/png;base64,'+r.screenshot_b64+'" onclick="openModal('+idx+')" title="Click to enlarge" />';
+    else if (hasDone) th.innerHTML='<span class="text-slate-500 text-xs">None</span>';
   }
 
-  document.getElementById('dl-' + idx).innerHTML = `
-    <div class="flex flex-col gap-1">
-      <button class="dl-btn" ${hasDone?'':'disabled'} onclick="dlHtml(${idx})">&#8595; HTML</button>
-      <button class="dl-btn" ${hasDone?'':'disabled'} onclick="dlJson(${idx})">&#8595; DOM JSON</button>
-      <button class="dl-btn" ${hasDone&&r.screenshot_b64?'':'disabled'} onclick="dlScreenshot(${idx})">&#8595; Screenshot</button>
-    </div>`;
-}
+  const dl = document.getElementById('dl-'+idx);
+  if (dl) dl.innerHTML=`<button class="dl-btn" ${hasDone?'':'disabled'} onclick="dlHtml(${idx})">&#8595; HTML</button>
+<button class="dl-btn" ${hasDone?'':'disabled'} onclick="dlJson(${idx})">&#8595; DOM JSON</button>
+<button class="dl-btn" ${hasDone&&r.screenshot_b64?'':'disabled'} onclick="dlScreenshot(${idx})">&#8595; Screenshot</button>
+<button class="dl-btn" ${hasDone||status==='no_dm'?'':'disabled'} onclick="dlContact(${idx})">&#8595; Contact</button>`;
 
-// Download helpers
-function slugify(url) {
-  try { return new URL(url).hostname.replace(/^www\./, '').replace(/[^a-z0-9]/gi,'_'); } catch(e) { return 'page'; }
-}
-function dlHtml(idx) {
-  const r = results[urls[idx].url];
-  if (!r || !r.html) return;
-  const blob = new Blob([r.html], {type:'text/html'});
-  triggerDownload(URL.createObjectURL(blob), (r.slug||slugify(urls[idx].url)) + '_rendered.html');
-}
-function dlJson(idx) {
-  const r = results[urls[idx].url];
-  if (!r || !r.dom_states) return;
-  const blob = new Blob([JSON.stringify(r.dom_states, null, 2)], {type:'application/json'});
-  triggerDownload(URL.createObjectURL(blob), (r.slug||slugify(urls[idx].url)) + '_dom_states.json');
-}
-function dlScreenshot(idx) {
-  const r = results[urls[idx].url];
-  if (!r || !r.screenshot_b64) return;
-  const byteStr = atob(r.screenshot_b64);
-  const ab = new ArrayBuffer(byteStr.length);
-  const ia = new Uint8Array(ab);
-  for (let i=0;i<byteStr.length;i++) ia[i]=byteStr.charCodeAt(i);
-  const blob = new Blob([ab], {type:'image/png'});
-  triggerDownload(URL.createObjectURL(blob), (r.slug||slugify(urls[idx].url)) + '_screenshot.png');
-}
-function triggerDownload(href, filename) {
-  const a = document.createElement('a');
-  a.href = href; a.download = filename; a.click();
-  setTimeout(() => URL.revokeObjectURL(href), 5000);
-}
-function downloadAll() {
-  urls.forEach((u, i) => {
-    const r = results[u.url];
-    if (!r || r.status !== 'done') return;
-    setTimeout(() => dlHtml(i), i * 100);
-    setTimeout(() => dlJson(i), i * 100 + 50);
-    if (r.screenshot_b64) setTimeout(() => dlScreenshot(i), i * 100 + 100);
-  });
+  updateStats();
 }
 
 // Scraping
 function getSelected() {
-  return [...document.querySelectorAll('.url-check:checked')].map(cb => urls[parseInt(cb.dataset.idx)]);
+  return [...document.querySelectorAll('.url-check:checked')].map(cb=>urls[parseInt(cb.dataset.idx)]);
 }
 async function runScraping() {
   if (running) return;
   const selected = getSelected();
   if (!selected.length) { alert('Select at least one URL.'); return; }
-  running = true;
-  document.getElementById('runBtn').disabled = true;
-  document.getElementById('runBtn').textContent = 'Running...';
+  running=true;
+  document.getElementById('runBtn').disabled=true;
+  document.getElementById('runBtn').textContent='Running...';
   document.getElementById('overallProgress').classList.remove('hidden');
-  let done = 0;
-  const total = selected.length;
+  let done=0; const total=selected.length;
   const tick = () => {
     done++;
-    document.getElementById('progressCount').textContent = done + ' / ' + total;
-    document.getElementById('progressBar').style.width = Math.round(done/total*100) + '%';
-    document.getElementById('progressLabel').textContent = done === total ? 'Complete!' : 'Running...';
+    document.getElementById('progressCount').textContent=done+' / '+total;
+    document.getElementById('progressBar').style.width=Math.round(done/total*100)+'%';
+    document.getElementById('progressLabel').textContent=done===total?'Complete!':'Running...';
   };
-  if (mode === 'sequential') {
+  if (mode==='sequential') {
     for (const u of selected) { await scrapeOne(u); tick(); }
   } else {
-    const w = parseInt(document.getElementById('workerCount').value) || 3;
-    const q = [...selected];
-    await Promise.all(Array.from({length: Math.min(w, selected.length)}, async () => {
-      while (q.length) { const u = q.shift(); await scrapeOne(u); tick(); }
+    const w=parseInt(document.getElementById('workerCount').value)||3;
+    const q=[...selected];
+    await Promise.all(Array.from({length:Math.min(w,selected.length)}, async()=>{
+      while(q.length){const u=q.shift();await scrapeOne(u);tick();}
     }));
   }
-  running = false;
-  document.getElementById('runBtn').disabled = false;
-  document.getElementById('runBtn').textContent = 'Run Scraper';
+  running=false;
+  document.getElementById('runBtn').disabled=false;
+  document.getElementById('runBtn').textContent='▶ Run Scraper';
 }
+
 async function scrapeOne(u) {
-  results[u.url] = {status:'running'};
+  results[u.url]={status:'running'};
   updateRow(u.idx);
   try {
-    const resp = await fetch(apiBase() + '/scrape', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({url: u.url}),
-    });
-    const data = await resp.json();
-    results[u.url] = data.error ? {status:'error', error:data.error} : {...data, status:'done'};
+    const body={url:u.url};
+    if (hunterKey()) body.hunter_api_key=hunterKey();
+    if (skipHunter()) body.skip_hunter=true;
+    const resp=await fetch(apiBase()+'/scrape',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const data=await resp.json();
+    if (data.error) {
+      results[u.url]={status:'error',error:data.error};
+    } else if (data.no_decision_maker) {
+      results[u.url]={status:'no_dm',hunter_data:data.hunter_data};
+    } else {
+      results[u.url]={...data,status:'done'};
+    }
   } catch(err) {
-    results[u.url] = {status:'error', error: err.message};
+    results[u.url]={status:'error',error:err.message};
   }
   updateRow(u.idx);
 }
 
-function selectAll()  { document.querySelectorAll('.url-check').forEach(cb => cb.checked=true); }
-function selectNone() { document.querySelectorAll('.url-check').forEach(cb => cb.checked=false); }
-function toggleAll(m) { document.querySelectorAll('.url-check').forEach(cb => cb.checked=m.checked); }
+function selectAll()  { document.querySelectorAll('.url-check').forEach(cb=>cb.checked=true); }
+function selectNone() { document.querySelectorAll('.url-check').forEach(cb=>cb.checked=false); }
+function toggleAll(m) { document.querySelectorAll('.url-check').forEach(cb=>cb.checked=m.checked); }
 
+// Modal
 function openModal(idx) {
-  const r = results[urls[idx].url];
-  if (!r || !r.screenshot_b64) return;
-  document.getElementById('modalImg').src = 'data:image/png;base64,' + r.screenshot_b64;
+  const r=results[urls[idx].url];
+  if(!r||!r.screenshot_b64) return;
+  document.getElementById('modalImg').src='data:image/png;base64,'+r.screenshot_b64;
   document.getElementById('modal').classList.remove('hidden');
 }
 function closeModal() { document.getElementById('modal').classList.add('hidden'); }
 
-function exportCsv() {
-  const rows = [['#','URL','Status','Elements','Error']];
+// Downloads
+function slugify(url) {
+  try{return new URL(url).hostname.replace(/^www\./,'').replace(/[^a-z0-9]/gi,'_');}catch(e){return 'page';}
+}
+function triggerDownload(href, filename) {
+  const a=document.createElement('a'); a.href=href; a.download=filename; a.click();
+  setTimeout(()=>URL.revokeObjectURL(href),5000);
+}
+function dlHtml(idx) {
+  const r=results[urls[idx].url]; if(!r||!r.html) return;
+  triggerDownload(URL.createObjectURL(new Blob([r.html],{type:'text/html'})), slugify(urls[idx].url)+'_rendered.html');
+}
+function dlJson(idx) {
+  const r=results[urls[idx].url]; if(!r||!r.dom_states) return;
+  triggerDownload(URL.createObjectURL(new Blob([JSON.stringify(r.dom_states,null,2)],{type:'application/json'})), slugify(urls[idx].url)+'_dom_states.json');
+}
+function dlScreenshot(idx) {
+  const r=results[urls[idx].url]; if(!r||!r.screenshot_b64) return;
+  const b=atob(r.screenshot_b64),ab=new ArrayBuffer(b.length),ia=new Uint8Array(ab);
+  for(let i=0;i<b.length;i++) ia[i]=b.charCodeAt(i);
+  triggerDownload(URL.createObjectURL(new Blob([ab],{type:'image/png'})), slugify(urls[idx].url)+'_screenshot.png');
+}
+function dlContact(idx) {
+  const r=results[urls[idx].url]; if(!r) return;
+  const hd=r.hunter_data||{};
+  const lines=[
+    'URL,First Name,Last Name,Title,Email,Phone,Confidence,Status',
+    [urls[idx].url, hd.first_name||'', hd.last_name||'', hd.title||'', hd.email||'', hd.phone||'', hd.confidence||'', r.status]
+      .map(c=>'"'+String(c).replace(/"/g,'""')+'"').join(',')
+  ].join('\n');
+  triggerDownload('data:text/csv;charset=utf-8,'+encodeURIComponent(lines), slugify(urls[idx].url)+'_contact.csv');
+}
+function downloadAll() {
   urls.forEach((u,i) => {
-    const r = results[u.url] || {};
-    rows.push([i+1, u.url, r.status||'pending', r.dom_summary?r.dom_summary.total_elements:'', r.error||'']);
+    const r=results[u.url];
+    if (!r) return;
+    const t=i*200;
+    if (r.status==='done') {
+      setTimeout(()=>dlHtml(i),t);
+      setTimeout(()=>dlJson(i),t+60);
+      if (r.screenshot_b64) setTimeout(()=>dlScreenshot(i),t+120);
+    }
+    if (r.hunter_data&&r.hunter_data.found) setTimeout(()=>dlContact(i),t+180);
   });
-  const csv = rows.map(r => r.map(c => '"'+String(c).replace(/"/g,'""')+'"').join(',')).join('\n');
-  const a = document.createElement('a');
-  a.href = 'data:text/csv;charset=utf-8,'+encodeURIComponent(csv);
-  a.download = 'scrape_results.csv'; a.click();
+}
+
+// Export CSV
+function exportCsv() {
+  const rows=[['#','URL','Status','First Name','Last Name','Title','Email','Phone','Confidence','Elements','Error']];
+  urls.forEach((u,i)=>{
+    const r=results[u.url]||{};
+    const hd=r.hunter_data||{};
+    rows.push([i+1,u.url,r.status||'pending',
+      hd.first_name||'',hd.last_name||'',hd.title||'',hd.email||'',hd.phone||'',hd.confidence||'',
+      r.dom_summary?r.dom_summary.total_elements:'',r.error||'']);
+  });
+  const csv=rows.map(r=>r.map(c=>'"'+String(c).replace(/"/g,'""')+'"').join(',')).join('\n');
+  const a=document.createElement('a');
+  a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(csv);
+  a.download='scrape_results.csv'; a.click();
 }
 </script>
 </body>
