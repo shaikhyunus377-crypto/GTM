@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+"""
+Remote MCP Server — Web Scraper
+MCP Streamable HTTP transport (POST /mcp) — required by Claude.ai web.
+Deploy to Railway; set SCRAPINGBEE_API_KEY and BASE_URL in Railway env vars.
+"""
+
 import os
 import json
 import base64
@@ -9,13 +15,10 @@ from urllib.parse import urlparse, urlencode
 
 from bs4 import BeautifulSoup
 from scrapingbee import ScrapingBeeClient
-from mcp.server import Server
-from mcp.server.sse import SseServerTransport
-from mcp.types import Tool, TextContent, ImageContent
 from starlette.applications import Starlette
-from starlette.routing import Route, Mount
+from starlette.routing import Route
 from starlette.requests import Request
-from starlette.responses import JSONResponse, RedirectResponse
+from starlette.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
 from starlette.middleware.cors import CORSMiddleware
 import uvicorn
 
@@ -24,8 +27,28 @@ OUTPUT_DIR = os.environ.get("SCRAPER_OUTPUT_DIR", "/tmp/scraper_output")
 PORT = int(os.environ.get("PORT", 8000))
 BASE_URL = os.environ.get("BASE_URL", "https://gtm-production-8ae5.up.railway.app")
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
+
+MCP_PROTOCOL_VERSION = "2024-11-05"
+SERVER_INFO = {"name": "web-scraper", "version": "1.0.0"}
+
+TOOLS = [{
+    "name": "scrape_website",
+    "description": (
+        "Scrapes a website using a real headless browser (ScrapingBee). "
+        "Returns rendered HTML, DOM states JSON with bounding boxes, and a full-page PNG screenshot."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "url": {"type": "string", "description": "Full URL to scrape, e.g. https://example.com"}
+        },
+        "required": ["url"],
+    },
+}]
+
+# ── Scraping logic ──────────────────────────────────────────────────────────────────────
 
 TAGS = ['a','button','h1','h2','h3','h4','h5','h6','img','input','form','label','section','header','footer']
 COORDINATE_JS = (
@@ -37,13 +60,13 @@ COORDINATE_JS = (
 )
 
 
-def safe_folder(url):
+def safe_folder(url: str) -> str:
     parsed = urlparse(url)
     name = parsed.netloc.replace("www.", "")
     return "".join(c if c.isalnum() or c in "._-" else "_" for c in name)
 
 
-def build_dom_states(html, url, live_elements):
+def build_dom_states(html: str, url: str, live_elements: list) -> dict:
     soup = BeautifulSoup(html, "html.parser")
     elements = []
     for idx, el in enumerate(soup.find_all(TAGS)):
@@ -65,7 +88,7 @@ def build_dom_states(html, url, live_elements):
     return {"meta": {"engine": "ScrapingBee", "url": url, "status": "success"}, "elements": elements}
 
 
-def scrape_sync(url):
+def scrape_sync(url: str) -> dict:
     if not SCRAPINGBEE_API_KEY:
         return {"error": "SCRAPINGBEE_API_KEY env var not set."}
     client = ScrapingBeeClient(api_key=SCRAPINGBEE_API_KEY)
@@ -75,7 +98,8 @@ def scrape_sync(url):
                "dom_summary": None, "screenshot_b64": None, "error": None}
     try:
         resp = client.get(url, params={
-            "render_js": "true", "wait": "4500", "window_width": "1440", "window_height": "2000",
+            "render_js": "true", "wait": "4500",
+            "window_width": "1440", "window_height": "2000",
             "js_scenario": {"instructions": [{"evaluate": COORDINATE_JS}]},
         })
         if resp.status_code != 200:
@@ -122,62 +146,90 @@ def scrape_sync(url):
     return result
 
 
-# ── MCP Server ─────────────────────────────────────────────────────────────
+# ── MCP Streamable HTTP handler (JSON-RPC 2.0) ──────────────────────────────────────
 
-mcp_app = Server("web-scraper")
+async def dispatch(msg: dict):
+    method = msg.get("method", "")
+    msg_id = msg.get("id")
+    params = msg.get("params", {})
 
+    def ok(result):
+        return {"jsonrpc": "2.0", "id": msg_id, "result": result}
 
-@mcp_app.list_tools()
-async def list_tools():
-    return [Tool(
-        name="scrape_website",
-        description="Scrapes a website using a real headless browser. Returns rendered HTML, DOM states JSON with bounding boxes, and a full-page screenshot.",
-        inputSchema={"type": "object",
-                     "properties": {"url": {"type": "string", "description": "Full URL to scrape"}},
-                     "required": ["url"]},
-    )]
+    def err(code, message):
+        return {"jsonrpc": "2.0", "id": msg_id, "error": {"code": code, "message": message}}
 
-
-@mcp_app.call_tool()
-async def call_tool(name, arguments):
-    if name != "scrape_website":
-        raise ValueError(f"Unknown tool: {name}")
-    url = arguments.get("url", "").strip()
-    if not url.startswith("http"):
-        return [TextContent(type="text", text="Error: URL must start with http:// or https://")]
-    loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, scrape_sync, url)
-    if result.get("error"):
-        return [TextContent(type="text", text=f"Scrape failed: {result['error']}")]
-    lines = [
-        f"Scrape complete: {url}", "",
-        f"DOM: {result['dom_summary']['total_elements']} elements", "",
-        "Sample:", json.dumps(result["dom_summary"]["sample"][:3], indent=2), "",
-        f"HTML: {result['html_path']}",
-        f"DOM JSON: {result['dom_states_path']}",
-        f"Screenshot: {result.get('screenshot_path') or 'not captured'}",
-    ]
-    content = [TextContent(type="text", text="\n".join(lines))]
-    if result.get("screenshot_b64"):
-        content.append(ImageContent(type="image", data=result["screenshot_b64"], mimeType="image/png"))
-    return content
-
-
-# ── SSE transport ─────────────────────────────────────────────────────────────
-
-sse = SseServerTransport("/messages/")
-
-
-async def handle_sse(request: Request):
-    async with sse.connect_sse(request.scope, request.receive, request._send) as streams:
-        await mcp_app.run(streams[0], streams[1], mcp_app.create_initialization_options())
-
-
-async def handle_messages(request: Request):
-    await sse.handle_post_message(request.scope, request.receive, request._send)
+    if method == "initialize":
+        return ok({
+            "protocolVersion": MCP_PROTOCOL_VERSION,
+            "capabilities": {"tools": {}},
+            "serverInfo": SERVER_INFO,
+        })
+    elif method == "ping":
+        return ok({})
+    elif method == "tools/list":
+        return ok({"tools": TOOLS})
+    elif method == "tools/call":
+        name = params.get("name")
+        args = params.get("arguments", {})
+        if name != "scrape_website":
+            return err(-32601, f"Unknown tool: {name}")
+        url = args.get("url", "").strip()
+        if not url.startswith("http"):
+            return ok({"content": [{"type": "text", "text": "Error: URL must start with http:// or https://"}], "isError": True})
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, scrape_sync, url)
+        if result.get("error"):
+            return ok({"content": [{"type": "text", "text": f"Scrape failed: {result['error']}"}], "isError": True})
+        lines = [
+            f"Scrape complete: {url}", "",
+            f"DOM: {result['dom_summary']['total_elements']} elements found", "",
+            "Sample elements:", json.dumps(result["dom_summary"]["sample"][:3], indent=2), "",
+            f"HTML saved: {result['html_path']}",
+            f"DOM JSON: {result['dom_states_path']}",
+            f"Screenshot: {result.get('screenshot_path') or 'not captured'}",
+        ]
+        content = [{"type": "text", "text": "\n".join(lines)}]
+        if result.get("screenshot_b64"):
+            content.append({"type": "image", "data": result["screenshot_b64"], "mimeType": "image/png"})
+        return ok({"content": content, "isError": False})
+    elif msg_id is None:
+        return None  # notification — no response
+    else:
+        return err(-32601, f"Method not found: {method}")
 
 
-# ── OAuth (required by Claude.ai) ───────────────────────────────────────────
+async def handle_mcp(request: Request):
+    if request.method == "GET":
+        # Keep-alive SSE stream for server-initiated messages
+        async def event_stream():
+            while True:
+                yield "event: ping\ndata: {}\n\n"
+                await asyncio.sleep(15)
+        return StreamingResponse(
+            event_stream(), media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(
+            {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error"}},
+            status_code=400,
+        )
+
+    if isinstance(body, list):
+        responses = [r for r in [await dispatch(m) for m in body] if r is not None]
+        return JSONResponse(responses) if responses else Response(status_code=202)
+
+    result = await dispatch(body)
+    if result is None:
+        return Response(status_code=202)
+    return JSONResponse(result)
+
+
+# ── OAuth 2.0 (required by Claude.ai web) ─────────────────────────────────────────────────
 
 async def oauth_protected_resource(request: Request):
     return JSONResponse({
@@ -214,10 +266,15 @@ async def oauth_token(request: Request):
     })
 
 async def healthcheck(request: Request):
-    return JSONResponse({"status": "ok", "server": "web-scraper MCP", "transport": "sse", "endpoint": "/sse"})
+    return JSONResponse({
+        "status": "ok",
+        "server": "web-scraper MCP",
+        "transport": "streamable-http",
+        "endpoint": "/mcp",
+    })
 
 
-# ── App with CORS ──────────────────────────────────────────────────────────────
+# ── App ─────────────────────────────────────────────────────────────────────────────────────
 
 web = Starlette(routes=[
     Route("/", healthcheck),
@@ -225,8 +282,7 @@ web = Starlette(routes=[
     Route("/.well-known/oauth-authorization-server", oauth_authorization_server),
     Route("/oauth/authorize", oauth_authorize),
     Route("/oauth/token", oauth_token, methods=["GET", "POST"]),
-    Route("/sse", handle_sse),
-    Mount("/messages/", app=handle_messages),
+    Route("/mcp", handle_mcp, methods=["GET", "POST", "OPTIONS"]),
 ])
 
 web.add_middleware(
