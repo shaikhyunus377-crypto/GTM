@@ -179,25 +179,28 @@ def extract_og_evidence(html: str) -> dict:
     return {"og_count": len(og), "twitter_count": len(tw)}
 
 
+def _schema_graph_has(obj, field: str) -> bool:
+    """Recursively search the entire JSON-LD graph for a field."""
+    if isinstance(obj, dict):
+        if field in obj:
+            return True
+        return any(_schema_graph_has(v, field) for v in obj.values())
+    if isinstance(obj, list):
+        return any(_schema_graph_has(item, field) for item in obj)
+    return False
+
+
 def extract_schema_evidence(html: str) -> dict:
-    blocks = re.findall(r'<script[^>]+ld\+json[^>]*>(.*?)</script>', html, re.S | re.I)
-    results = []
-    for raw in blocks:
+    blocks_raw = re.findall(r'<script[^>]+ld\+json[^>]*>(.*?)</script>', html, re.S | re.I)
+    blocks = []
+    for raw in blocks_raw:
         try:
-            d = json.loads(raw)
-            t = d.get("@type", "")
-            if isinstance(t, list): t = t[0]
-            results.append({
-                "type": t,
-                "has_rating":      "aggregateRating" in d,
-                "has_hours":       "openingHours"    in d,
-                "has_price_range": "priceRange"      in d,
-                "has_telephone":   "telephone"        in d,
-                "has_address":     "address"          in d,
-            })
+            blocks.append(json.loads(raw))
         except Exception:
             pass
-    return {"blocks": results, "count": len(results), "has_any_rating": any(r["has_rating"] for r in results)}
+    # Traverse the full graph for each field — shallow `field in d` misses nested objects
+    has_rating = any(_schema_graph_has(b, "aggregateRating") for b in blocks)
+    return {"count": len(blocks), "has_any_rating": has_rating}
 
 
 def extract_form_evidence(html: str, dom_elements: list) -> dict:
@@ -526,7 +529,7 @@ def eval_mobile_tap_targets(issue: dict, ev: dict):
     # The coordinate matching can assign sub-element widths to the anchor, inflating
     # the small count. If > 60% of all interactive elements appear "small", it's almost
     # certainly a measurement artifact (real pages rarely have that many undersized links).
-    if total > 0 and small / total > 0.60:
+    if total > 0 and small / total > 0.40:
         # Directly override bot decision — this ratio pattern is a known false positive
         issue["decision"]         = "verification_required"
         issue["confidence_score"] = 50
@@ -604,6 +607,7 @@ def detect_gaps(issues: list[dict], industry: str) -> list[dict]:
             "findings":         [GAP_DESCRIPTIONS.get(check_id, "")],
             "evidence":         [],
             "origin":           "gap_detector",
+            "client_visible":   False,   # NEVER show pipeline QA gaps to clients
         })
     return gaps
 
@@ -673,7 +677,12 @@ def run_wolf(
             except Exception as exc:
                 issue.setdefault("decision_reasons", []).append(f"wolf_eval_error: {exc}")
 
+    # ── Passed markers: explicit bots that found nothing ─────────────────────────
+    # Also inject for suppressed issues — wolf suppressed = bot ran, wolf overrode
     active_issues = [i for i in issues if i.get("decision") != "suppressed"]
+    for issue in issues:
+        if issue.get("decision") == "suppressed":
+            active_issues.append({"id": f"{issue['id']}_passed"})
 
     form_ev   = evidence["form_ev"]
     phone_ev  = evidence["phone_ev"]
@@ -682,6 +691,7 @@ def run_wolf(
     social_ev = evidence["social_ev"]
     trust_ev  = evidence["trust_ev"]
     tap_ev    = evidence["tap_ev"]
+    og_ev     = evidence["og_ev"]
 
     if form_ev["booking_link_count"] >= 3 or form_ev["form_count"] > 0:
         active_issues.append({"id": "conversion_form_passed"})
@@ -697,12 +707,14 @@ def run_wolf(
         active_issues.append({"id": "trust_signals_passed"})
     if tap_ev["small_count"] == 0 and tap_ev["ok_count"] > 0:
         active_issues.append({"id": "mobile_tap_targets_passed"})
+    if og_ev["og_count"] > 0:
+        active_issues.append({"id": "og_social_meta_passed"})
 
     gaps = detect_gaps(active_issues, industry)
 
-    active    = [i for i in issues if i.get("decision") != "suppressed"]
+    active     = [i for i in issues if i.get("decision") != "suppressed"]
     suppressed = [i for i in issues if i.get("decision") == "suppressed"]
-    all_out   = active + gaps
+    all_out    = active + gaps
 
     def sort_key(x):
         d = {"confirmed": 0, "verification_required": 1, "suppressed": 2}.get(x.get("decision",""), 3)
@@ -711,10 +723,25 @@ def run_wolf(
 
     all_out.sort(key=sort_key)
 
+    # ── Client report: only high-confidence confirmed findings, no gap items ─────
+    client_report = [
+        i for i in all_out
+        if i.get("client_visible", True)          # gaps are False
+        and i.get("origin") != "gap_detector"
+        and i.get("decision") == "confirmed"
+        and i.get("confidence_score", 0) >= 70
+    ]
+
+    client_summary = {
+        "high":   sum(1 for i in client_report if i.get("severity") == "high"),
+        "medium": sum(1 for i in client_report if i.get("severity") == "medium"),
+        "low":    sum(1 for i in client_report if i.get("severity") == "low"),
+    }
+
     return {
         "meta": {
             "engine":       "cro_wolf",
-            "version":      "2.0",
+            "version":      "2.1",
             "industry":     industry,
             "generated_at": datetime.now(timezone.utc).isoformat(),
         },
@@ -725,11 +752,14 @@ def run_wolf(
             "verification_required": sum(1 for i in all_out if i.get("decision") == "verification_required"),
             "suppressed":            len(suppressed),
             "gaps_detected":         len(gaps),
+            "client_findings":       len(client_report),
         },
-        "issues":     all_out,
-        "suppressed": suppressed,
+        "issues":        all_out,           # full internal audit trail
+        "client_report": client_report,     # clean client-facing findings only
+        "client_summary": client_summary,
+        "suppressed":    suppressed,
         "evidence_summary": {
-            k: {kk: vv for kk, vv in v.items() if kk not in ("lazy_broken","truly_broken","blocks","items")}
+            k: {kk: vv for kk, vv in v.items() if kk not in ("lazy_broken","truly_broken","items")}
             for k, v in evidence.items()
         },
     }

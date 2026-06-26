@@ -289,13 +289,13 @@ function croCellHtml(idx) {
   if (!cro) return startBtn || '<span class="text-slate-600 text-xs">—</span>';
   if (cro.error) return `<span class="text-red-400 text-xs">Error: ${cro.error.slice(0,30)}</span> ${startBtn}`;
 
-  const s = cro.summary || {};
+  // Use client_summary (clean findings only) for badge display
+  const cs = cro.client_summary || cro.summary || {};
   const badges = [
-    s.confirmed_high   > 0 ? `<span class="badge badge-red">${s.confirmed_high} HIGH</span>` : '',
-    s.confirmed_medium > 0 ? `<span class="badge badge-yellow">${s.confirmed_medium} MED</span>` : '',
-    s.verification_required > 0 ? `<span class="badge badge-slate">${s.verification_required} VER</span>` : '',
-    s.gaps_detected    > 0 ? `<span class="badge badge-slate">${s.gaps_detected} GAP</span>` : '',
-  ].filter(Boolean).join(' ');
+    cs.high   > 0 ? `<span class="badge badge-red">${cs.high} HIGH</span>` : '',
+    cs.medium > 0 ? `<span class="badge badge-yellow">${cs.medium} MED</span>` : '',
+    cs.low    > 0 ? `<span class="badge badge-slate">${cs.low} LOW</span>` : '',
+  ].filter(Boolean).join(' ') || '<span class="badge badge-green">✓ Pass</span>';
 
   return `<div class="flex flex-wrap gap-1 items-center">
     ${badges}
@@ -573,36 +573,69 @@ function showCroModal(idx) {
   document.getElementById('cro-modal-meta').textContent =
     `Industry: ${m.industry || '—'}  •  Generated: ${(m.generated_at || '').slice(0,19).replace('T',' ')}`;
 
-  const s = cro.summary || {};
-  document.getElementById('cro-modal-summary').innerHTML = [
-    `<span class="badge badge-red text-sm px-2 py-1">${s.confirmed_high || 0} High</span>`,
-    `<span class="badge badge-yellow text-sm px-2 py-1">${s.confirmed_medium || 0} Medium</span>`,
-    `<span class="badge badge-slate text-sm px-2 py-1">${s.verification_required || 0} Verify</span>`,
-    `<span class="badge badge-slate text-sm px-2 py-1">${s.suppressed || 0} Suppressed</span>`,
-    `<span class="badge badge-slate text-sm px-2 py-1">${s.gaps_detected || 0} Gaps</span>`,
+  // Use client_summary for badge counts (clean client-facing view)
+  const cs = cro.client_summary || {};
+  const s  = cro.summary || {};
+  const hasClientSummary = cro.client_summary != null;
+  const high   = hasClientSummary ? (cs.high   || 0) : (s.confirmed_high   || 0);
+  const medium = hasClientSummary ? (cs.medium || 0) : (s.confirmed_medium || 0);
+  const low    = hasClientSummary ? (cs.low    || 0) : 0;
+
+  let summaryHtml = [
+    high   ? `<span class="badge badge-red text-sm px-2 py-1">${high} High</span>`     : '',
+    medium ? `<span class="badge badge-yellow text-sm px-2 py-1">${medium} Medium</span>` : '',
+    low    ? `<span class="badge badge-slate text-sm px-2 py-1">${low} Low</span>`      : '',
+    (!high && !medium && !low) ? `<span class="badge badge-green text-sm px-2 py-1">✓ No Issues</span>` : '',
   ].join('');
 
-  const issues = cro.issues || [];
-  document.getElementById('cro-modal-issues').innerHTML = issues.map(issue => {
-    const sev   = issue.severity || 'low';
-    const dec   = issue.decision || 'confirmed';
-    const decBadge = dec === 'suppressed' ? '<span class="badge badge-slate">suppressed</span>'
-      : dec === 'verification_required'  ? '<span class="badge badge-yellow">verify</span>'
-      : '<span class="badge badge-green">confirmed</span>';
+  // Internal toggle state
+  const internalKey = `cro_internal_${idx}`;
+  const showInternal = window[internalKey] || false;
+  summaryHtml += `
+    <button class="btn btn-slate btn-sm ml-auto text-xs" onclick="toggleInternalCro(${idx})">
+      ${showInternal ? 'Hide internal' : 'Show full audit'}
+    </button>`;
+  document.getElementById('cro-modal-summary').innerHTML = summaryHtml;
 
-    return `<div class="issue-card ${sev} ${issue.origin === 'gap_detector' ? 'gap' : ''}">
+  // Choose which issue list to show
+  const clientIssues   = cro.client_report || [];
+  const internalIssues = cro.issues || [];
+  const displayIssues  = showInternal ? internalIssues : clientIssues;
+
+  function renderIssue(issue) {
+    const sev = issue.severity || 'low';
+    const dec = issue.decision || 'confirmed';
+    const isGap = issue.origin === 'gap_detector';
+    const decBadge = dec === 'suppressed'
+      ? '<span class="badge badge-slate">suppressed</span>'
+      : dec === 'verification_required'
+        ? '<span class="badge badge-yellow">verify</span>'
+        : '<span class="badge badge-green">confirmed</span>';
+    return `<div class="issue-card ${sev}${isGap ? ' gap' : ''}">
       <div class="flex gap-2 items-start flex-wrap mb-1">
         <span class="badge ${sev === 'high' ? 'badge-red' : sev === 'medium' ? 'badge-yellow' : 'badge-slate'}">${sev.toUpperCase()}</span>
         ${decBadge}
+        ${isGap ? '<span class="badge badge-slate text-xs">internal</span>' : ''}
         <span class="font-semibold text-sm">${issue.title || issue.id}</span>
       </div>
       ${(issue.findings||[]).map(f => `<div class="text-xs text-slate-300 mb-1">• ${f}</div>`).join('')}
       ${issue.fix ? `<div class="text-xs text-indigo-300 mt-1 border-t border-slate-700 pt-1"><strong>Fix:</strong> ${issue.fix}</div>` : ''}
       ${issue.revenue_signal ? `<div class="text-xs text-green-400 mt-1">${issue.revenue_signal}</div>` : ''}
     </div>`;
-  }).join('') || '<div class="text-slate-400 text-sm">No issues found.</div>';
+  }
+
+  document.getElementById('cro-modal-issues').innerHTML =
+    displayIssues.length
+      ? displayIssues.map(renderIssue).join('')
+      : `<div class="text-slate-400 text-sm">${showInternal ? 'No issues in full audit.' : 'No confirmed issues — site passes client checks.'}</div>`;
 
   document.getElementById('cro-modal').style.display = 'flex';
+}
+
+function toggleInternalCro(idx) {
+  const key = `cro_internal_${idx}`;
+  window[key] = !window[key];
+  showCroModal(idx);  // re-render with toggled state
 }
 
 function closeCroModal() {
