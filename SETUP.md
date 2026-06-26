@@ -1,57 +1,38 @@
-# Web Scraper MCP — Setup Guide
+# Web Scraper MCP — Mobile/Web Setup (Railway)
 
-## 1. Install dependencies
+## Deploy to Railway (one-time, no terminal needed)
 
-```bash
-pip install -r requirements.txt
-```
+1. Go to **railway.app** and sign in with GitHub
+2. Click **New Project → Deploy from GitHub repo**
+3. Select your **GTM** repo
+4. Railway auto-detects `railway.toml` and deploys
 
-## 2. Connect to Claude Desktop
+## Set your API key in Railway
 
-Open `~/Library/Application Support/Claude/claude_desktop_config.json` (Mac)
-or `%APPDATA%\Claude\claude_desktop_config.json` (Windows) and add:
+In Railway → your service → **Variables**, add:
 
-```json
-{
-  "mcpServers": {
-    "web-scraper": {
-      "command": "python",
-      "args": ["/absolute/path/to/scraper_mcp_server.py"],
-      "env": {
-        "SCRAPINGBEE_API_KEY": "YOUR_SCRAPINGBEE_KEY",
-        "SCRAPER_OUTPUT_DIR": "/absolute/path/to/output_folder"
-      }
-    }
-  }
-}
-```
+| Key | Value |
+|-----|-------|
+| `SCRAPINGBEE_API_KEY` | your ScrapingBee key |
 
-Replace the paths with real absolute paths on your machine.
+## Get your public URL
 
-## 3. Restart Claude Desktop
+Railway → your service → **Settings → Domains** → Generate Domain.
+It will look like: `https://gtm-production-xxxx.up.railway.app`
 
-Quit and reopen Claude Desktop. You should see **web-scraper** listed under
-connected MCP servers (hammer icon in the toolbar).
+## Connect to Claude.ai (web / mobile)
 
-## 4. Use it in Claude chat
+1. Open **claude.ai** in Chrome
+2. Go to **Settings → Integrations** (or the MCP/connectors panel)
+3. Add a new MCP server:
+   - **URL:** `https://your-railway-url.up.railway.app/sse`
+   - **Name:** Web Scraper
 
-Just say:
+## Use it in chat
 
-> **Scrape https://example.com**
+Just say: **"Scrape https://example.com"**
 
-Claude will call `scrape_website`, and you'll get back:
-- A summary of extracted DOM elements
-- The full-page screenshot displayed inline (if ≤ 750 KB)
-- All three files saved locally:
-  - `full_rendered_inlined.html`
-  - `dom_states.json`
-  - `full_page.png`
-
-## Environment variables (optional)
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `SCRAPINGBEE_API_KEY` | hardcoded fallback | Your ScrapingBee API key |
-| `SCRAPER_OUTPUT_DIR` | `~/scraper_output` | Where files are saved |
-
-Setting `SCRAPINGBEE_API_KEY` via env is recommended over hardcoding it.
+Claude will call `scrape_website` and return:
+- DOM element summary
+- Full-page screenshot shown inline in chat
+- Rendered HTML + dom_states.json saved on the server
