@@ -7,23 +7,26 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
   <style>
-    body { background: #0f172a; color: #e2e8f0; font-family: 'Inter', system-ui, sans-serif; }
+    body { background: #0f172a; color: #e2e8f0; font-family: system-ui, sans-serif; }
     .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; }
     .drop-zone { border: 2px dashed #475569; transition: all 0.2s; }
     .drop-zone.drag-over { border-color: #6366f1; background: #1e1b4b; }
-    .status-pending  { color: #94a3b8; }
-    .status-running  { color: #fbbf24; }
-    .status-done     { color: #34d399; }
-    .status-error    { color: #f87171; }
+    .status-pending { color: #94a3b8; }
+    .status-running { color: #fbbf24; }
+    .status-done    { color: #34d399; }
+    .status-error   { color: #f87171; }
     .progress-bar { transition: width 0.4s ease; }
     ::-webkit-scrollbar { width: 6px; }
     ::-webkit-scrollbar-track { background: #1e293b; }
     ::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
-    .thumb-img { width: 80px; height: 50px; object-fit: cover; border-radius: 4px; cursor: pointer; border: 1px solid #475569; }
-    .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 1000; display: flex; align-items: center; justify-content: center; }
-    .modal-img { max-width: 90vw; max-height: 90vh; border-radius: 8px; }
-    .spinner { border: 2px solid #334155; border-top-color: #6366f1; border-radius: 50%; width: 16px; height: 16px; animation: spin 0.7s linear infinite; display: inline-block; vertical-align: middle; margin-right: 6px; }
-    @keyframes spin { to { transform: rotate(360deg); } }
+    .thumb-img { width: 72px; height: 46px; object-fit: cover; border-radius: 4px; cursor: pointer; border: 1px solid #475569; }
+    .modal-overlay { position:fixed;inset:0;background:rgba(0,0,0,.88);z-index:1000;display:flex;align-items:center;justify-content:center; }
+    .modal-img { max-width:90vw;max-height:90vh;border-radius:8px; }
+    .spinner { border:2px solid #334155;border-top-color:#6366f1;border-radius:50%;width:14px;height:14px;animation:spin .7s linear infinite;display:inline-block;vertical-align:middle;margin-right:5px; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+    .dl-btn { font-size:11px;padding:3px 8px;border-radius:5px;cursor:pointer;border:1px solid #475569;background:#0f172a;color:#94a3b8;white-space:nowrap; }
+    .dl-btn:hover { background:#1e293b;color:#e2e8f0; }
+    .dl-btn:disabled { opacity:0.35;cursor:default; }
   </style>
 </head>
 <body class="min-h-screen">
@@ -37,9 +40,9 @@
   <div id="apiStatus" class="text-xs px-3 py-1 rounded-full bg-slate-700 text-slate-400">Checking API...</div>
 </div>
 
-<div class="max-w-7xl mx-auto px-6 py-8 space-y-6">
+<div class="max-w-7xl mx-auto px-4 py-6 space-y-5">
 
-  <!-- Config row -->
+  <!-- Config -->
   <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
     <div class="card p-4">
       <label class="block text-xs text-slate-400 mb-1">Backend URL</label>
@@ -49,14 +52,12 @@
     <div class="card p-4">
       <label class="block text-xs text-slate-400 mb-1">Mode</label>
       <div class="flex gap-2 mt-1">
-        <button id="btnSequential" onclick="setMode('sequential')"
-          class="flex-1 py-2 rounded-lg text-sm font-medium bg-indigo-600 text-white">Sequential</button>
-        <button id="btnParallel" onclick="setMode('parallel')"
-          class="flex-1 py-2 rounded-lg text-sm font-medium bg-slate-700 text-slate-300">Parallel</button>
+        <button id="btnSeq" onclick="setMode('sequential')" class="flex-1 py-2 rounded-lg text-sm font-medium bg-indigo-600 text-white">Sequential</button>
+        <button id="btnPar" onclick="setMode('parallel')"   class="flex-1 py-2 rounded-lg text-sm font-medium bg-slate-700 text-slate-300">Parallel</button>
       </div>
     </div>
     <div class="card p-4">
-      <label class="block text-xs text-slate-400 mb-1">Parallel workers (max)</label>
+      <label class="block text-xs text-slate-400 mb-1">Parallel workers</label>
       <input id="workerCount" type="number" value="3" min="1" max="10"
         class="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500" />
     </div>
@@ -70,26 +71,26 @@
     ondrop="handleDrop(event)">
     <div class="text-4xl mb-3">&#128194;</div>
     <p class="text-white font-medium">Drop Excel / CSV file here or click to browse</p>
-    <p class="text-slate-400 text-sm mt-1">Supports .xlsx, .xls, .csv &mdash; any columns, URLs auto-detected</p>
+    <p class="text-slate-400 text-sm mt-1">Supports .xlsx, .xls, .csv &mdash; URLs auto-detected from any column</p>
     <input id="fileInput" type="file" accept=".xlsx,.xls,.csv" class="hidden" onchange="handleFile(this.files[0])" />
   </div>
 
-  <!-- URL table -->
+  <!-- URL section -->
   <div id="urlSection" class="hidden">
     <div class="flex items-center justify-between mb-3">
       <div>
         <h2 class="text-white font-semibold" id="urlHeading">URLs detected</h2>
         <p class="text-slate-400 text-xs mt-0.5" id="urlSubheading"></p>
       </div>
-      <div class="flex gap-2">
-        <button onclick="selectAll()" class="text-xs px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300">Select all</button>
+      <div class="flex gap-2 flex-wrap justify-end">
+        <button onclick="selectAll()"  class="text-xs px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300">Select all</button>
         <button onclick="selectNone()" class="text-xs px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300">Deselect all</button>
-        <button id="runBtn" onclick="runScraping()"
-          class="px-5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium">Run Scraper</button>
+        <button onclick="downloadAll()" class="text-xs px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300">&#8595; Download all</button>
+        <button id="runBtn" onclick="runScraping()" class="px-5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium">Run Scraper</button>
       </div>
     </div>
 
-    <!-- Overall progress -->
+    <!-- Progress -->
     <div id="overallProgress" class="hidden card p-4 mb-4">
       <div class="flex justify-between text-sm mb-2">
         <span class="text-slate-300" id="progressLabel">Running...</span>
@@ -105,13 +106,14 @@
       <div class="overflow-x-auto">
         <table class="w-full text-sm">
           <thead>
-            <tr class="border-b border-slate-700">
-              <th class="px-4 py-3 text-left w-8"><input type="checkbox" id="checkAll" onchange="toggleAll(this)" /></th>
-              <th class="px-4 py-3 text-left text-slate-400 font-medium">#</th>
-              <th class="px-4 py-3 text-left text-slate-400 font-medium">URL</th>
-              <th class="px-4 py-3 text-left text-slate-400 font-medium">Status</th>
-              <th class="px-4 py-3 text-left text-slate-400 font-medium">Elements</th>
-              <th class="px-4 py-3 text-left text-slate-400 font-medium">Screenshot</th>
+            <tr class="border-b border-slate-700 text-left">
+              <th class="px-4 py-3 w-8"><input type="checkbox" id="checkAll" onchange="toggleAll(this)" /></th>
+              <th class="px-4 py-3 text-slate-400 font-medium">#</th>
+              <th class="px-4 py-3 text-slate-400 font-medium">URL</th>
+              <th class="px-4 py-3 text-slate-400 font-medium">Status</th>
+              <th class="px-4 py-3 text-slate-400 font-medium">Elements</th>
+              <th class="px-4 py-3 text-slate-400 font-medium">Screenshot</th>
+              <th class="px-4 py-3 text-slate-400 font-medium">Downloads</th>
             </tr>
           </thead>
           <tbody id="urlTableBody"></tbody>
@@ -119,15 +121,14 @@
       </div>
     </div>
 
-    <!-- Export -->
     <div class="flex justify-end mt-3">
-      <button onclick="exportResults()" class="text-xs px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300">Export results CSV</button>
+      <button onclick="exportCsv()" class="text-xs px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300">Export results CSV</button>
     </div>
   </div>
 
 </div>
 
-<!-- Screenshot modal -->
+<!-- Modal -->
 <div id="modal" class="modal-overlay hidden" onclick="closeModal()">
   <img id="modalImg" class="modal-img" src="" alt="Screenshot" onclick="event.stopPropagation()" />
 </div>
@@ -138,112 +139,105 @@ let urls = [];
 let results = {};
 let running = false;
 
+// API health
 function checkApi() {
-  const base = document.getElementById('apiUrl').value.trim().replace(/\/$/, '');
-  fetch(base + '/')
-    .then(r => r.json())
-    .then(d => {
-      const el = document.getElementById('apiStatus');
-      if (d.status === 'ok') {
-        el.textContent = 'API online';
-        el.className = 'text-xs px-3 py-1 rounded-full bg-green-900 text-green-400';
-      }
-    })
-    .catch(() => {
-      const el = document.getElementById('apiStatus');
-      el.textContent = 'API offline';
-      el.className = 'text-xs px-3 py-1 rounded-full bg-red-900 text-red-400';
-    });
+  const base = apiBase();
+  fetch(base + '/').then(r => r.json()).then(d => {
+    const el = document.getElementById('apiStatus');
+    el.textContent = d.status === 'ok' ? 'API online' : 'API error';
+    el.className = 'text-xs px-3 py-1 rounded-full ' + (d.status === 'ok' ? 'bg-green-900 text-green-400' : 'bg-red-900 text-red-400');
+  }).catch(() => {
+    const el = document.getElementById('apiStatus');
+    el.textContent = 'API offline';
+    el.className = 'text-xs px-3 py-1 rounded-full bg-red-900 text-red-400';
+  });
 }
 document.getElementById('apiUrl').addEventListener('change', checkApi);
 checkApi();
 
+function apiBase() { return document.getElementById('apiUrl').value.trim().replace(/\/$/, ''); }
+
 function setMode(m) {
   mode = m;
-  document.getElementById('btnSequential').className =
-    'flex-1 py-2 rounded-lg text-sm font-medium ' + (m === 'sequential' ? 'bg-indigo-600 text-white' : 'bg-slate-700 text-slate-300');
-  document.getElementById('btnParallel').className =
-    'flex-1 py-2 rounded-lg text-sm font-medium ' + (m === 'parallel' ? 'bg-indigo-600 text-white' : 'bg-slate-700 text-slate-300');
+  document.getElementById('btnSeq').className = 'flex-1 py-2 rounded-lg text-sm font-medium ' + (m==='sequential' ? 'bg-indigo-600 text-white' : 'bg-slate-700 text-slate-300');
+  document.getElementById('btnPar').className = 'flex-1 py-2 rounded-lg text-sm font-medium ' + (m==='parallel'   ? 'bg-indigo-600 text-white' : 'bg-slate-700 text-slate-300');
 }
 
+// File handling
 function handleDrop(e) {
   e.preventDefault();
   document.getElementById('dropZone').classList.remove('drag-over');
   handleFile(e.dataTransfer.files[0]);
 }
-
 function handleFile(file) {
   if (!file) return;
   const reader = new FileReader();
   reader.onload = e => {
-    const wb = XLSX.read(e.target.result, {type: 'binary'});
+    const wb = XLSX.read(e.target.result, {type:'binary'});
     const ws = wb.Sheets[wb.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json(ws, {header: 1, defval: ''});
-    processRows(rows, file.name);
+    processRows(XLSX.utils.sheet_to_json(ws, {header:1, defval:''}), file.name);
   };
   reader.readAsBinaryString(file);
 }
-
-function isUrl(val) {
-  return typeof val === 'string' && (val.startsWith('http://') || val.startsWith('https://'));
-}
-
+function isUrl(v) { return typeof v === 'string' && (v.startsWith('http://') || v.startsWith('https://')); }
 function processRows(rows, filename) {
   if (!rows.length) { alert('File is empty.'); return; }
-  const urlColIndices = [];
-  const headers = rows[0];
-  headers.forEach((h, i) => {
-    let urlCount = 0;
-    for (let r = 1; r < Math.min(rows.length, 11); r++) {
-      if (isUrl(rows[r][i])) urlCount++;
-    }
-    if (urlCount > 0) urlColIndices.push(i);
+  const urlCols = [];
+  rows[0].forEach((h, i) => {
+    let n = 0;
+    for (let r = 1; r < Math.min(rows.length, 11); r++) if (isUrl(rows[r][i])) n++;
+    if (n > 0) urlCols.push(i);
   });
   urls = [];
-  if (urlColIndices.length > 0) {
-    rows.slice(1).forEach(row => {
-      urlColIndices.forEach(ci => {
-        const val = row[ci];
-        if (isUrl(val)) urls.push({url: val.trim(), idx: urls.length});
-      });
-    });
-  } else {
-    rows.slice(1).forEach(row => {
-      row.forEach(cell => {
-        if (isUrl(cell)) urls.push({url: cell.trim(), idx: urls.length});
-      });
-    });
-  }
   const seen = new Set();
-  urls = urls.filter(u => { if (seen.has(u.url)) return false; seen.add(u.url); return true; });
-  urls.forEach((u, i) => u.idx = i);
+  const add = v => { v = v.trim(); if (!seen.has(v)) { seen.add(v); urls.push({url:v, idx:urls.length}); } };
+  if (urlCols.length) rows.slice(1).forEach(row => urlCols.forEach(ci => { if (isUrl(row[ci])) add(row[ci]); }));
+  else rows.slice(1).forEach(row => row.forEach(cell => { if (isUrl(cell)) add(cell); }));
+  urls.forEach((u,i) => u.idx = i);
   results = {};
   document.getElementById('urlSection').classList.remove('hidden');
-  document.getElementById('urlHeading').textContent = urls.length + ' URL' + (urls.length !== 1 ? 's' : '') + ' found';
+  document.getElementById('urlHeading').textContent = urls.length + ' URL' + (urls.length!==1?'s':'') + ' found';
   document.getElementById('urlSubheading').textContent = 'From: ' + filename;
   renderTable();
 }
 
+// Table
 function renderTable() {
   const tbody = document.getElementById('urlTableBody');
   tbody.innerHTML = '';
-  urls.forEach((u, i) => {
-    const r = results[u.url] || {};
-    const status = r.status || 'pending';
-    const labels = {pending:'Pending', running:'<span class="spinner"></span>Running', done:'Done', error:'Error'};
+  urls.forEach((u,i) => {
     const row = document.createElement('tr');
     row.id = 'row-' + i;
-    row.className = 'border-b border-slate-800 hover:bg-slate-800/40';
-    row.innerHTML = `
-      <td class="px-4 py-3"><input type="checkbox" class="url-check" data-idx="${i}" checked /></td>
-      <td class="px-4 py-3 text-slate-400">${i+1}</td>
-      <td class="px-4 py-3 max-w-xs"><a href="${u.url}" target="_blank" class="text-indigo-400 hover:underline text-xs break-all">${u.url}</a></td>
-      <td class="px-4 py-3 status-${status} text-xs">${labels[status]||'Pending'}</td>
-      <td class="px-4 py-3 text-slate-300">&mdash;</td>
-      <td class="px-4 py-3">&mdash;</td>
-    `;
+    row.className = 'border-b border-slate-800 hover:bg-slate-800/30';
+    row.innerHTML = rowHtml(u, i);
     tbody.appendChild(row);
   });
+}
+
+function rowHtml(u, i) {
+  const r = results[u.url] || {};
+  const status = r.status || 'pending';
+  const labels = {pending:'Pending', running:'<span class="spinner"></span>Running', done:'Done', error:'Error'};
+  const thumb = r.screenshot_b64
+    ? `<img class="thumb-img" src="data:image/png;base64,${r.screenshot_b64}" onclick="openModal('${i}')" title="Click to enlarge" />`
+    : (status==='done' ? '<span class="text-slate-500 text-xs">None</span>' : '&mdash;');
+  const hasDone = status === 'done';
+  const slug = r.slug || slugify(u.url);
+  const dlHtml = `
+    <div class="flex flex-col gap-1">
+      <button class="dl-btn" ${hasDone?'':'disabled'} onclick="dlHtml(${i})">&#8595; HTML</button>
+      <button class="dl-btn" ${hasDone?'':'disabled'} onclick="dlJson(${i})">&#8595; DOM JSON</button>
+      <button class="dl-btn" ${hasDone&&r.screenshot_b64?'':'disabled'} onclick="dlScreenshot(${i})">&#8595; Screenshot</button>
+    </div>`;
+  return `
+    <td class="px-4 py-3"><input type="checkbox" class="url-check" data-idx="${i}" checked /></td>
+    <td class="px-4 py-3 text-slate-400">${i+1}</td>
+    <td class="px-4 py-3 max-w-xs"><a href="${u.url}" target="_blank" class="text-indigo-400 hover:underline text-xs break-all">${u.url}</a></td>
+    <td class="px-4 py-3 status-${status} text-xs" id="status-${i}">${labels[status]||'Pending'}${r.error?'<br><span class="text-red-400">'+r.error.substring(0,70)+'</span>':''}</td>
+    <td class="px-4 py-3 text-slate-300" id="elems-${i}">${hasDone?(r.dom_summary?r.dom_summary.total_elements:'0'):'&mdash;'}</td>
+    <td class="px-4 py-3" id="thumb-${i}">${thumb}</td>
+    <td class="px-4 py-3" id="dl-${i}">${dlHtml}</td>
+  `;
 }
 
 function updateRow(idx) {
@@ -253,23 +247,74 @@ function updateRow(idx) {
   const labels = {pending:'Pending', running:'<span class="spinner"></span>Running', done:'Done', error:'Error'};
   const row = document.getElementById('row-' + idx);
   if (!row) return;
-  row.cells[3].className = 'px-4 py-3 status-' + status + ' text-xs';
-  row.cells[3].innerHTML = (labels[status]||'Pending') + (r.error ? '<span class="text-red-400 text-xs block mt-1">' + r.error.substring(0,80) + '</span>' : '');
-  row.cells[4].textContent = r.dom_summary ? r.dom_summary.total_elements : (status==='done'?'0':'—');
+  const hasDone = status === 'done';
+
+  document.getElementById('status-' + idx).className = 'px-4 py-3 status-' + status + ' text-xs';
+  document.getElementById('status-' + idx).innerHTML = (labels[status]||'Pending') + (r.error ? '<br><span class="text-red-400">' + r.error.substring(0,70) + '</span>' : '');
+  document.getElementById('elems-' + idx).textContent = hasDone ? (r.dom_summary ? r.dom_summary.total_elements : '0') : '—';
+
   if (r.screenshot_b64) {
-    row.cells[5].innerHTML = '<img class="thumb-img" src="data:image/png;base64,' + r.screenshot_b64 + '" onclick="openModal(\'' + u.url.replace(/'/g,"\\'") + '\')" title="Click to enlarge" />';
-  } else if (status === 'done') {
-    row.cells[5].innerHTML = '<span class="text-slate-500 text-xs">No screenshot</span>';
+    document.getElementById('thumb-' + idx).innerHTML = '<img class="thumb-img" src="data:image/png;base64,' + r.screenshot_b64 + '" onclick="openModal(' + idx + ')" title="Click to enlarge" />';
+  } else if (hasDone) {
+    document.getElementById('thumb-' + idx).innerHTML = '<span class="text-slate-500 text-xs">None</span>';
   }
+
+  document.getElementById('dl-' + idx).innerHTML = `
+    <div class="flex flex-col gap-1">
+      <button class="dl-btn" ${hasDone?'':'disabled'} onclick="dlHtml(${idx})">&#8595; HTML</button>
+      <button class="dl-btn" ${hasDone?'':'disabled'} onclick="dlJson(${idx})">&#8595; DOM JSON</button>
+      <button class="dl-btn" ${hasDone&&r.screenshot_b64?'':'disabled'} onclick="dlScreenshot(${idx})">&#8595; Screenshot</button>
+    </div>`;
 }
 
-function getSelectedUrls() {
+// Download helpers
+function slugify(url) {
+  try { return new URL(url).hostname.replace(/^www\./, '').replace(/[^a-z0-9]/gi,'_'); } catch(e) { return 'page'; }
+}
+function dlHtml(idx) {
+  const r = results[urls[idx].url];
+  if (!r || !r.html) return;
+  const blob = new Blob([r.html], {type:'text/html'});
+  triggerDownload(URL.createObjectURL(blob), (r.slug||slugify(urls[idx].url)) + '_rendered.html');
+}
+function dlJson(idx) {
+  const r = results[urls[idx].url];
+  if (!r || !r.dom_states) return;
+  const blob = new Blob([JSON.stringify(r.dom_states, null, 2)], {type:'application/json'});
+  triggerDownload(URL.createObjectURL(blob), (r.slug||slugify(urls[idx].url)) + '_dom_states.json');
+}
+function dlScreenshot(idx) {
+  const r = results[urls[idx].url];
+  if (!r || !r.screenshot_b64) return;
+  const byteStr = atob(r.screenshot_b64);
+  const ab = new ArrayBuffer(byteStr.length);
+  const ia = new Uint8Array(ab);
+  for (let i=0;i<byteStr.length;i++) ia[i]=byteStr.charCodeAt(i);
+  const blob = new Blob([ab], {type:'image/png'});
+  triggerDownload(URL.createObjectURL(blob), (r.slug||slugify(urls[idx].url)) + '_screenshot.png');
+}
+function triggerDownload(href, filename) {
+  const a = document.createElement('a');
+  a.href = href; a.download = filename; a.click();
+  setTimeout(() => URL.revokeObjectURL(href), 5000);
+}
+function downloadAll() {
+  urls.forEach((u, i) => {
+    const r = results[u.url];
+    if (!r || r.status !== 'done') return;
+    setTimeout(() => dlHtml(i), i * 100);
+    setTimeout(() => dlJson(i), i * 100 + 50);
+    if (r.screenshot_b64) setTimeout(() => dlScreenshot(i), i * 100 + 100);
+  });
+}
+
+// Scraping
+function getSelected() {
   return [...document.querySelectorAll('.url-check:checked')].map(cb => urls[parseInt(cb.dataset.idx)]);
 }
-
 async function runScraping() {
   if (running) return;
-  const selected = getSelectedUrls();
+  const selected = getSelected();
   if (!selected.length) { alert('Select at least one URL.'); return; }
   running = true;
   document.getElementById('runBtn').disabled = true;
@@ -277,66 +322,63 @@ async function runScraping() {
   document.getElementById('overallProgress').classList.remove('hidden');
   let done = 0;
   const total = selected.length;
-  const updateProgress = () => {
+  const tick = () => {
     done++;
     document.getElementById('progressCount').textContent = done + ' / ' + total;
     document.getElementById('progressBar').style.width = Math.round(done/total*100) + '%';
     document.getElementById('progressLabel').textContent = done === total ? 'Complete!' : 'Running...';
   };
   if (mode === 'sequential') {
-    for (const u of selected) { await scrapeOne(u); updateProgress(); }
+    for (const u of selected) { await scrapeOne(u); tick(); }
   } else {
-    const workers = parseInt(document.getElementById('workerCount').value) || 3;
-    const queue = [...selected];
-    const runWorker = async () => { while (queue.length) { const u = queue.shift(); await scrapeOne(u); updateProgress(); } };
-    await Promise.all(Array.from({length: Math.min(workers, selected.length)}, runWorker));
+    const w = parseInt(document.getElementById('workerCount').value) || 3;
+    const q = [...selected];
+    await Promise.all(Array.from({length: Math.min(w, selected.length)}, async () => {
+      while (q.length) { const u = q.shift(); await scrapeOne(u); tick(); }
+    }));
   }
   running = false;
   document.getElementById('runBtn').disabled = false;
   document.getElementById('runBtn').textContent = 'Run Scraper';
 }
-
 async function scrapeOne(u) {
-  const base = document.getElementById('apiUrl').value.trim().replace(/\/$/, '');
-  results[u.url] = {status: 'running'};
+  results[u.url] = {status:'running'};
   updateRow(u.idx);
   try {
-    const resp = await fetch(base + '/scrape', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
+    const resp = await fetch(apiBase() + '/scrape', {
+      method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({url: u.url}),
     });
     const data = await resp.json();
     results[u.url] = data.error ? {status:'error', error:data.error} : {...data, status:'done'};
-  } catch (err) {
-    results[u.url] = {status: 'error', error: err.message};
+  } catch(err) {
+    results[u.url] = {status:'error', error: err.message};
   }
   updateRow(u.idx);
 }
 
-function selectAll()  { document.querySelectorAll('.url-check').forEach(cb => cb.checked = true); }
-function selectNone() { document.querySelectorAll('.url-check').forEach(cb => cb.checked = false); }
-function toggleAll(m) { document.querySelectorAll('.url-check').forEach(cb => cb.checked = m.checked); }
+function selectAll()  { document.querySelectorAll('.url-check').forEach(cb => cb.checked=true); }
+function selectNone() { document.querySelectorAll('.url-check').forEach(cb => cb.checked=false); }
+function toggleAll(m) { document.querySelectorAll('.url-check').forEach(cb => cb.checked=m.checked); }
 
-function openModal(url) {
-  const r = results[url];
+function openModal(idx) {
+  const r = results[urls[idx].url];
   if (!r || !r.screenshot_b64) return;
   document.getElementById('modalImg').src = 'data:image/png;base64,' + r.screenshot_b64;
   document.getElementById('modal').classList.remove('hidden');
 }
 function closeModal() { document.getElementById('modal').classList.add('hidden'); }
 
-function exportResults() {
+function exportCsv() {
   const rows = [['#','URL','Status','Elements','Error']];
-  urls.forEach((u, i) => {
+  urls.forEach((u,i) => {
     const r = results[u.url] || {};
-    rows.push([i+1, u.url, r.status||'pending', r.dom_summary ? r.dom_summary.total_elements : '', r.error||'']);
+    rows.push([i+1, u.url, r.status||'pending', r.dom_summary?r.dom_summary.total_elements:'', r.error||'']);
   });
-  const csv = rows.map(r => r.map(c => '"' + String(c).replace(/"/g,'""') + '"').join(',')).join('\n');
+  const csv = rows.map(r => r.map(c => '"'+String(c).replace(/"/g,'""')+'"').join(',')).join('\n');
   const a = document.createElement('a');
-  a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
-  a.download = 'scrape_results.csv';
-  a.click();
+  a.href = 'data:text/csv;charset=utf-8,'+encodeURIComponent(csv);
+  a.download = 'scrape_results.csv'; a.click();
 }
 </script>
 </body>
