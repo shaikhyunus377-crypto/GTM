@@ -305,11 +305,17 @@ def extract_mobile_tap_evidence(dom_elements: list) -> dict:
         if e.get("tag") in ("a","button","input")
         and (e.get("states",{}).get("default",{}).get("bbox",{}) or {}).get("y", 0) > 0
         and (e.get("states",{}).get("default",{}).get("bbox",{}) or {}).get("width", 0) > 0
+        and (e.get("states",{}).get("default",{}).get("bbox",{}) or {}).get("height", 0) > 0
     ]
     small, ok = [], []
     for e in interactive:
         bbox = e.get("states",{}).get("default",{}).get("bbox",{}) or {}
         w, h = bbox.get("width",0), bbox.get("height",0)
+        # Skip elements with suspiciously tiny height (< 4px) — these are almost always
+        # invisible inline elements (hidden lang spans, ::before pseudo-content) that
+        # received a coordinate via index drift, not real tap targets.
+        if h < 4:
+            continue
         if 0 < w < MIN_W or 0 < h < MIN_H:
             small.append({"tag": e.get("tag"), "text": (e.get("text") or "")[:30], "w": int(w), "h": int(h)})
         else:
@@ -346,7 +352,35 @@ def eval_h1(issue: dict, ev: dict):
         issue["affected_elements"] = [{"tag": "h1", "text": item["text"], "id": ""}]
         issue["evidence"] = [f"H1 content: \"{item['text']}\""]
     if item["below_fold"]:
-        confirm(issue, 88, "dom_h1_below_fold", ["dom_states.json"])
+        y = item["y"]
+        if y > 2000:
+            # y > 2000px almost always means an inflated parent container (sticky header,
+            # mobile nav overlay, or translated element) pushed the bounding box down.
+            # The H1 is visually in the hero but the CSS layout caused a coordinate artifact.
+            # Directly override decision — wolf has stronger evidence than the bot here.
+            if not item["is_empty"] and not item["is_promo"]:
+                # H1 text is valid; the only flag was below-fold which is an artifact → suppress
+                suppress(
+                    issue,
+                    f"dom_h1_y={y}px_layout_artifact_h1_text_is_valid",
+                    ["dom_states.json"],
+                )
+            else:
+                # H1 also has other problems; keep issue but note the fold measurement is suspect
+                issue["decision"] = "verification_required"
+                issue["confidence_score"] = 55
+                issue.setdefault("decision_reasons", []).append(
+                    f"wolf_note: y={y}px may be layout artifact — verify below-fold visually"
+                )
+            issue["findings"] = [
+                f.replace(
+                    "below the fold",
+                    f"reported below fold at y={y}px (likely CSS layout artifact in parent container — verify visually)"
+                )
+                for f in issue.get("findings", [])
+            ]
+        else:
+            confirm(issue, 88, "dom_h1_below_fold", ["dom_states.json"])
     if not item["is_empty"] and not item["is_promo"] and not item["below_fold"]:
         suppress(issue, "dom_shows_h1_is_valid", ["dom_states.json"])
 
@@ -480,11 +514,35 @@ def eval_trust_signals(issue: dict, ev: dict):
 
 
 def eval_mobile_tap_targets(issue: dict, ev: dict):
-    if ev.get("small_count", 0) > 0:
-        confirm(issue, 85, f"dom_confirms_{ev['small_count']}_small_tap_targets", ["dom_states.json"])
-        issue["affected_elements"] = ev.get("small_samples", [])
-    else:
+    small = ev.get("small_count", 0)
+    ok    = ev.get("ok_count", 0)
+    total = small + ok
+
+    if small == 0:
         suppress(issue, "dom_shows_all_tap_targets_adequate_size", ["dom_states.json"])
+        return
+
+    # Bilingual / multi-language sites inject hidden inline spans inside every <a>.
+    # The coordinate matching can assign sub-element widths to the anchor, inflating
+    # the small count. If > 60% of all interactive elements appear "small", it's almost
+    # certainly a measurement artifact (real pages rarely have that many undersized links).
+    if total > 0 and small / total > 0.60:
+        # Directly override bot decision — this ratio pattern is a known false positive
+        issue["decision"]         = "verification_required"
+        issue["confidence_score"] = 50
+        issue.setdefault("decision_reasons", []).append(
+            f"wolf_override: {small}/{total} small ({small*100//total}%) exceeds 60% threshold — "
+            "likely bilingual/inline-span coordinate drift; verify manually"
+        )
+        issue["findings"] = [
+            f + f" (NOTE: {small}/{total} elements flagged — high ratio suggests coordinate measurement artifact; verify visually)"
+            for f in issue.get("findings", [])
+        ]
+        issue["affected_elements"] = ev.get("small_samples", [])
+        return
+
+    confirm(issue, 85, f"dom_confirms_{small}_small_tap_targets", ["dom_states.json"])
+    issue["affected_elements"] = ev.get("small_samples", [])
 
 
 # ─────────────────────────────────────────────────────────────────────────────
