@@ -1,0 +1,272 @@
+#!/usr/bin/env python3
+"""
+Remote MCP Server — Web Scraper
+HTTP + SSE transport so Claude.ai web/mobile can connect to it.
+Deploy to Railway; set SCRAPINGBEE_API_KEY in Railway env vars.
+"""
+
+import os
+import json
+import base64
+import logging
+import asyncio
+from urllib.parse import urlparse
+
+from bs4 import BeautifulSoup
+from scrapingbee import ScrapingBeeClient
+from mcp.server import Server
+from mcp.server.sse import SseServerTransport
+from mcp.types import Tool, TextContent, ImageContent
+from starlette.applications import Starlette
+from starlette.routing import Route, Mount
+from starlette.requests import Request
+import uvicorn
+
+SCRAPINGBEE_API_KEY = os.environ.get("SCRAPINGBEE_API_KEY", "")
+OUTPUT_DIR = os.environ.get("SCRAPER_OUTPUT_DIR", "/tmp/scraper_output")
+PORT = int(os.environ.get("PORT", 8000))
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+log = logging.getLogger(__name__)
+
+COORDINATE_JS = (
+    "const elements = Array.from(document.querySelectorAll("
+    "  'a, button, h1, h2, h3, h4, h5, h6, img, input, form, label, section, header, footer'"
+    ")).map(el => {"
+    "  const rect = el.getBoundingClientRect();"
+    "  return { tag: el.tagName.toLowerCase(), x: rect.left + window.scrollX,"
+    "           y: rect.top + window.scrollY, width: rect.width, height: rect.height };"
+    "});"
+    "const c = document.createElement('div');"
+    "c.id = 'scrapingbee-live-dom-matrices';"
+    "c.style.display = 'none';"
+    "c.innerText = JSON.stringify(elements);"
+    "document.body.appendChild(c);"
+)
+
+TAGS = ['a', 'button', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+        'img', 'input', 'form', 'label', 'section', 'header', 'footer']
+
+
+def safe_folder(url: str) -> str:
+    parsed = urlparse(url)
+    name = parsed.netloc.replace("www.", "")
+    return "".join(c if c.isalnum() or c in "._-" else "_" for c in name)
+
+
+def build_dom_states(html: str, url: str, live_elements: list) -> dict:
+    soup = BeautifulSoup(html, "html.parser")
+    elements = []
+    for idx, el in enumerate(soup.find_all(TAGS)):
+        tag = el.name
+        text = (el.get_text(strip=True) or "")[:150]
+        x, y, w, h = 40, 120 + idx * 60, 280, 45
+        if idx < len(live_elements):
+            live = live_elements[idx]
+            if live.get("tag") == tag:
+                x = live.get("x", x)
+                y = live.get("y", y)
+                w = live.get("width", w)
+                h = live.get("height", h)
+        elements.append({
+            "tag": tag,
+            "text": text,
+            "id": el.get("id"),
+            "class": el.get("class"),
+            "role": el.get("role"),
+            "aria_label": el.get("aria-label"),
+            "states": {
+                "default": {
+                    "display": "block",
+                    "visibility": "visible",
+                    "bbox": {"x": int(x), "y": int(y), "width": int(w), "height": int(h)},
+                }
+            },
+        })
+    return {
+        "meta": {"engine": "ScrapingBee", "url": url, "status": "success"},
+        "elements": elements,
+    }
+
+
+def scrape_sync(url: str) -> dict:
+    if not SCRAPINGBEE_API_KEY:
+        return {"error": "SCRAPINGBEE_API_KEY env var not set on the server."}
+
+    client = ScrapingBeeClient(api_key=SCRAPINGBEE_API_KEY)
+    folder = os.path.join(OUTPUT_DIR, safe_folder(url))
+    os.makedirs(folder, exist_ok=True)
+
+    result: dict = {
+        "html_path": None,
+        "dom_states_path": None,
+        "screenshot_path": None,
+        "dom_summary": None,
+        "screenshot_b64": None,
+        "error": None,
+    }
+
+    log.info("Step 1 — fetching rendered HTML: %s", url)
+    html = ""
+    live_elements: list = []
+    try:
+        resp = client.get(
+            url,
+            params={
+                "render_js": "true",
+                "wait": "4500",
+                "window_width": "1440",
+                "window_height": "2000",
+                "js_scenario": {"instructions": [{"evaluate": COORDINATE_JS}]},
+            },
+        )
+        if resp.status_code != 200:
+            result["error"] = f"ScrapingBee HTML fetch failed: {resp.status_code}"
+            return result
+
+        html = resp.text
+        soup = BeautifulSoup(html, "html.parser")
+        container = soup.find(id="scrapingbee-live-dom-matrices")
+        if container and container.text:
+            live_elements = json.loads(container.text)
+            container.decompose()
+            html = str(soup)
+
+        html_path = os.path.join(folder, "full_rendered_inlined.html")
+        with open(html_path, "w", encoding="utf-8") as f:
+            f.write(html)
+        result["html_path"] = html_path
+
+    except Exception as exc:
+        result["error"] = f"HTML fetch error: {exc}"
+        return result
+
+    log.info("Step 2 — capturing screenshot")
+    try:
+        ss_resp = client.get(
+            url,
+            params={
+                "render_js": "true",
+                "wait": "4500",
+                "screenshot": "true",
+                "screenshot_full_page": "true",
+                "window_width": "1440",
+            },
+        )
+        if ss_resp.status_code == 200:
+            ss_path = os.path.join(folder, "full_page.png")
+            with open(ss_path, "wb") as f:
+                f.write(ss_resp.content)
+            result["screenshot_path"] = ss_path
+            if len(ss_resp.content) <= 750_000:
+                result["screenshot_b64"] = base64.b64encode(ss_resp.content).decode()
+    except Exception as exc:
+        log.warning("Screenshot error: %s", exc)
+
+    log.info("Step 3 — building dom_states.json")
+    dom = build_dom_states(html, url, live_elements)
+    dom_path = os.path.join(folder, "dom_states.json")
+    with open(dom_path, "w", encoding="utf-8") as f:
+        json.dump(dom, f, indent=2, ensure_ascii=False)
+    result["dom_states_path"] = dom_path
+    result["dom_summary"] = {
+        "total_elements": len(dom["elements"]),
+        "sample": dom["elements"][:5],
+    }
+
+    return result
+
+
+mcp_app = Server("web-scraper")
+
+
+@mcp_app.list_tools()
+async def list_tools() -> list[Tool]:
+    return [
+        Tool(
+            name="scrape_website",
+            description=(
+                "Scrapes a website using a real headless browser (ScrapingBee). "
+                "Returns: (1) fully rendered HTML with JS executed, "
+                "(2) DOM states JSON with bounding-box coordinates, "
+                "(3) full-page PNG screenshot shown inline."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "Full URL to scrape, e.g. https://example.com",
+                    }
+                },
+                "required": ["url"],
+            },
+        )
+    ]
+
+
+@mcp_app.call_tool()
+async def call_tool(name: str, arguments: dict):
+    if name != "scrape_website":
+        raise ValueError(f"Unknown tool: {name}")
+
+    url = arguments.get("url", "").strip()
+    if not url.startswith("http"):
+        return [TextContent(type="text", text="Error: URL must start with http:// or https://")]
+
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, scrape_sync, url)
+
+    if result.get("error"):
+        return [TextContent(type="text", text=f"Scrape failed: {result['error']}")]
+
+    lines = [
+        f"Scrape complete for: {url}",
+        "",
+        f"DOM summary: {result['dom_summary']['total_elements']} elements extracted.",
+        "",
+        "Sample elements (first 5):",
+        json.dumps(result["dom_summary"]["sample"], indent=2),
+        "",
+        "Full outputs saved server-side:",
+        f"  • {result['html_path']}",
+        f"  • {result['dom_states_path']}",
+        f"  • {result.get('screenshot_path') or 'screenshot not captured'}",
+    ]
+    content = [TextContent(type="text", text="\n".join(lines))]
+
+    if result.get("screenshot_b64"):
+        content.append(
+            ImageContent(type="image", data=result["screenshot_b64"], mimeType="image/png")
+        )
+
+    return content
+
+
+sse = SseServerTransport("/messages/")
+
+
+async def handle_sse(request: Request):
+    async with sse.connect_sse(request.scope, request.receive, request._send) as streams:
+        await mcp_app.run(streams[0], streams[1], mcp_app.create_initialization_options())
+
+
+async def handle_messages(request: Request):
+    await sse.handle_post_message(request.scope, request.receive, request._send)
+
+
+async def healthcheck(request: Request):
+    from starlette.responses import JSONResponse
+    return JSONResponse({"status": "ok", "server": "web-scraper MCP"})
+
+
+web = Starlette(
+    routes=[
+        Route("/", healthcheck),
+        Route("/sse", handle_sse),
+        Mount("/messages/", app=handle_messages),
+    ]
+)
+
+if __name__ == "__main__":
+    uvicorn.run(web, host="0.0.0.0", port=PORT)
