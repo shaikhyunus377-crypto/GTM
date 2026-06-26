@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>GTM CRO Audit Tool</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+<style>
+  body{font-family:system-ui,sans-serif;background:#0f172a;color:#e2e8f0}
+  .card{background:#1e293b;border:1px solid #334155;border-radius:.75rem}
+  .btn{padding:.4rem 1rem;border-radius:.5rem;font-size:.85rem;cursor:pointer;border:none;font-weight:600;transition:.15s}
+  .btn-primary{background:#6366f1;color:#fff}.btn-primary:hover{background:#4f46e5}
+  .btn-sm{padding:.25rem .65rem;font-size:.75rem}
+  .btn-green{background:#059669;color:#fff}.btn-green:hover{background:#047857}
+  .btn-red{background:#dc2626;color:#fff}.btn-red:hover{background:#b91c1c}
+  .btn-yellow{background:#d97706;color:#fff}.btn-yellow:hover{background:#b45309}
+  .btn-slate{background:#475569;color:#fff}.btn-slate:hover{background:#334155}
+  .badge{display:inline-block;padding:.1rem .4rem;border-radius:.25rem;font-size:.7rem;font-weight:700}
+  .badge-red{background:#7f1d1d;color:#fca5a5}
+  .badge-yellow{background:#78350f;color:#fde68a}
+  .badge-green{background:#14532d;color:#86efac}
+  .badge-slate{background:#1e293b;color:#94a3b8;border:1px solid #475569}
+  .spinner{display:inline-block;width:10px;height:10px;border:2px solid #ffffff44;border-top-color:#fff;border-radius:50%;animation:spin .6s linear infinite;margin-right:4px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .cro-start-btn{padding:.2rem .55rem;font-size:.72rem;border-radius:.35rem;cursor:pointer;border:1px solid #6366f1;background:#1e1b4b;color:#a5b4fc;font-weight:600;transition:.15s}
+  .cro-start-btn:hover:not(:disabled){background:#6366f1;color:#fff}
+  .cro-start-btn:disabled{opacity:.5;cursor:not-allowed}
+  table{border-collapse:collapse;width:100%}
+  th,td{text-align:left;padding:.45rem .6rem;border-bottom:1px solid #1e293b;font-size:.8rem;vertical-align:top}
+  th{background:#0f172a;color:#94a3b8;font-weight:600;position:sticky;top:0;z-index:10}
+  tr:hover td{background:#1e293b88}
+  input[type=text],input[type=url],select{background:#0f172a;border:1px solid #334155;border-radius:.4rem;color:#e2e8f0;padding:.3rem .6rem;font-size:.85rem}
+  input[type=text]:focus,input[type=url]:focus,select:focus{outline:none;border-color:#6366f1}
+  .modal-bg{position:fixed;inset:0;background:#00000088;z-index:50;display:flex;align-items:center;justify-content:center}
+  .modal-box{background:#1e293b;border:1px solid #334155;border-radius:.75rem;padding:1.5rem;max-width:56rem;width:95%;max-height:90vh;overflow-y:auto}
+  .issue-card{border:1px solid #334155;border-radius:.5rem;padding:.75rem;margin-bottom:.6rem;background:#0f172a}
+  .issue-card.high{border-left:3px solid #ef4444}
+  .issue-card.medium{border-left:3px solid #f59e0b}
+  .issue-card.low{border-left:3px solid #6366f1}
+  .issue-card.gap{border-left:3px solid #475569}
+</style>
+</head>
+<body class="min-h-screen">
+
+<!-- Header -->
+<div class="flex items-center justify-between px-6 py-3 border-b border-slate-700" style="background:#1e293b">
+  <div>
+    <span class="text-lg font-bold text-indigo-400">GTM</span>
+    <span class="text-slate-400 text-sm ml-2">CRO Audit Tool</span>
+  </div>
+  <div id="api-status" class="text-xs text-slate-500">Checking API…</div>
+</div>
+
+<!-- Config -->
+<div class="p-4 border-b border-slate-700" style="background:#1e293b88">
+  <div class="flex flex-wrap gap-3 items-end">
+    <!-- API URL -->
+    <div>
+      <div class="text-xs text-slate-400 mb-1">API URL</div>
+      <input id="api-url" type="url" placeholder="https://your-railway-app.up.railway.app"
+        class="w-80" oninput="saveConfig()"/>
+    </div>
+    <!-- Industry -->
+    <div>
+      <div class="text-xs text-slate-400 mb-1">Industry</div>
+      <select id="industry" onchange="saveConfig()">
+        <option value="all">All Industries</option>
+        <option value="dental">Dental</option>
+        <option value="medical">Medical</option>
+        <option value="local_business">Local Business</option>
+        <option value="ecommerce">E-Commerce</option>
+        <option value="saas">SaaS</option>
+        <option value="booking">Booking</option>
+        <option value="restaurant">Restaurant</option>
+        <option value="portfolio">Portfolio</option>
+      </select>
+    </div>
+    <!-- Workers -->
+    <div>
+      <div class="text-xs text-slate-400 mb-1">Workers</div>
+      <select id="workers" onchange="saveConfig()">
+        <option value="1">1 (safe)</option>
+        <option value="2" selected>2</option>
+        <option value="3">3</option>
+        <option value="5">5</option>
+      </select>
+    </div>
+    <!-- Hunter key -->
+    <div>
+      <div class="text-xs text-slate-400 mb-1">Hunter.io Key</div>
+      <input id="hunter-key" type="text" placeholder="(optional)" class="w-44" oninput="saveConfig()"/>
+    </div>
+    <!-- Ping -->
+    <button class="btn btn-slate btn-sm" onclick="pingApi()">⟳ Ping API</button>
+  </div>
+</div>
+
+<!-- Upload + controls -->
+<div class="p-4 border-b border-slate-700 flex flex-wrap gap-3 items-center">
+  <label class="btn btn-slate btn-sm cursor-pointer">
+    📂 Load Excel / CSV
+    <input type="file" accept=".xlsx,.xls,.csv" style="display:none" onchange="loadFile(this)"/>
+  </label>
+  <button class="btn btn-primary btn-sm" onclick="runAll()" id="btn-run">▶ Run All</button>
+  <button class="btn btn-sm" style="background:#7c3aed;color:#fff" onclick="runAllCro()" id="btn-cro-all">⚙ Run All CRO</button>
+  <button class="btn btn-slate btn-sm" onclick="stopAll()" id="btn-stop" disabled>■ Stop</button>
+  <button class="btn btn-green btn-sm" onclick="downloadAll()">↓ Download All</button>
+  <button class="btn btn-slate btn-sm" onclick="clearAll()">✕ Clear</button>
+
+  <!-- Stats -->
+  <div id="stats" class="ml-auto text-xs text-slate-400"></div>
+</div>
+
+<!-- Table -->
+<div style="overflow-x:auto;max-height:calc(100vh - 240px);overflow-y:auto">
+<table id="main-table">
+  <thead>
+    <tr>
+      <th>#</th>
+      <th>URL</th>
+      <th>Status</th>
+      <th>HTML</th>
+      <th>DOM</th>
+      <th>Screenshot</th>
+      <th>CRO Audit</th>
+      <th>Contacts</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+  <tbody id="table-body">
+    <tr><td colspan="9" class="text-center text-slate-500 py-8">Load an Excel/CSV file to begin</td></tr>
+  </tbody>
+</table>
+</div>
+
+<!-- CRO Detail Modal -->
+<div id="cro-modal" class="modal-bg" style="display:none" onclick="if(event.target===this)closeCroModal()">
+  <div class="modal-box">
+    <div class="flex justify-between items-start mb-4">
+      <div>
+        <div class="font-bold text-lg" id="cro-modal-title">CRO Report</div>
+        <div class="text-xs text-slate-400 mt-1" id="cro-modal-meta"></div>
+      </div>
+      <button class="text-slate-400 hover:text-white text-xl leading-none" onclick="closeCroModal()">✕</button>
+    </div>
+    <div id="cro-modal-summary" class="flex gap-3 mb-4 flex-wrap"></div>
+    <div id="cro-modal-issues"></div>
+  </div>
+</div>
+
+<script>
+// ── State ───────────────────────────────────────────────────────────────────
+let urls       = [];   // [{url, name}]
+let results    = {};   // {url: {status, html, dom_states, screenshot_b64, cro_audit, hunter_data, error}}
+let running    = false;
+let stopFlag   = false;
+let croRunning = new Set();
+
+// ── Config ───────────────────────────────────────────────────────────────────
+function apiBase() {
+  return (document.getElementById('api-url').value || '').replace(/\/$/, '');
+}
+function industry() { return document.getElementById('industry').value; }
+function workerCount() { return parseInt(document.getElementById('workers').value) || 2; }
+function hunterKey() { return document.getElementById('hunter-key').value.trim(); }
+
+function saveConfig() {
+  localStorage.setItem('gtm_api_url',  document.getElementById('api-url').value);
+  localStorage.setItem('gtm_industry', document.getElementById('industry').value);
+  localStorage.setItem('gtm_workers',  document.getElementById('workers').value);
+  localStorage.setItem('gtm_hunter',   document.getElementById('hunter-key').value);
+}
+
+function loadConfig() {
+  document.getElementById('api-url').value   = localStorage.getItem('gtm_api_url')  || '';
+  document.getElementById('industry').value  = localStorage.getItem('gtm_industry') || 'all';
+  document.getElementById('workers').value   = localStorage.getItem('gtm_workers')  || '2';
+  document.getElementById('hunter-key').value = localStorage.getItem('gtm_hunter')  || '';
+}
+
+// ── API ping ─────────────────────────────────────────────────────────────────
+async function pingApi() {
+  const base = apiBase();
+  const el   = document.getElementById('api-status');
+  if (!base) { el.textContent = 'Set API URL first'; el.className = 'text-xs text-red-400'; return; }
+  el.textContent = 'Pinging…'; el.className = 'text-xs text-slate-400';
+  try {
+    const r = await fetch(base + '/', {signal: AbortSignal.timeout(8000)});
+    const d = await r.json();
+    if (d.status === 'ok') {
+      const cro = d.cro_available ? ' + CRO' : ' (no CRO)';
+      el.textContent = `API online${cro} — v${d.server || '?'}`;
+      el.className   = 'text-xs text-green-400';
+    } else {
+      el.textContent = 'API error'; el.className = 'text-xs text-red-400';
+    }
+  } catch(e) {
+    el.textContent = 'API unreachable'; el.className = 'text-xs text-red-400';
+  }
+}
+
+// ── File loading ─────────────────────────────────────────────────────────────
+function loadFile(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    const wb   = XLSX.read(e.target.result, {type: 'array'});
+    const ws   = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws, {header: 1, defval: ''});
+    const newUrls = [];
+    for (const row of rows) {
+      for (const cell of row) {
+        const v = String(cell || '').trim();
+        if (v.startsWith('http')) {
+          newUrls.push({url: v, name: v.replace(/^https?:\/\/(www\.)?/, '').split('/')[0]});
+        }
+      }
+    }
+    if (!newUrls.length) { alert('No URLs found in file'); return; }
+    urls = newUrls;
+    results = {};
+    renderTable();
+    updateStats();
+  };
+  reader.readAsArrayBuffer(file);
+  input.value = '';
+}
+
+// ── Table render ─────────────────────────────────────────────────────────────
+function renderTable() {
+  const tbody = document.getElementById('table-body');
+  if (!urls.length) {
+    tbody.innerHTML = '<tr><td colspan="9" class="text-center text-slate-500 py-8">Load an Excel/CSV file to begin</td></tr>';
+    return;
+  }
+  tbody.innerHTML = urls.map((u, i) => rowHtml(i)).join('');
+}
+
+function rowHtml(idx) {
+  const u = urls[idx];
+  const r = results[u.url] || {};
+  const st = r.status || 'pending';
+
+  const statusBadge = {
+    'pending':  '<span class="badge badge-slate">pending</span>',
+    'running':  '<span class="badge" style="background:#1e3a5f;color:#93c5fd"><span class="spinner"></span>running</span>',
+    'done':     '<span class="badge badge-green">done</span>',
+    'error':    '<span class="badge badge-red">error</span>',
+  }[st] || `<span class="badge badge-slate">${st}</span>`;
+
+  const dlBtn = (label, fn, cond) =>
+    cond ? `<button class="btn btn-slate btn-sm" onclick="${fn}(${idx})">${label}</button>` : '';
+
+  return `<tr id="row-${idx}">
+    <td class="text-slate-500">${idx+1}</td>
+    <td class="max-w-xs truncate" title="${u.url}"><a href="${u.url}" target="_blank" class="text-indigo-400 hover:underline text-xs">${u.name || u.url}</a></td>
+    <td>${statusBadge}${r.error ? `<div class="text-red-400 text-xs mt-1">${r.error.slice(0,60)}</div>` : ''}</td>
+    <td>${dlBtn('↓ HTML', 'dlHtml', r.html)}</td>
+    <td>${dlBtn('↓ DOM', 'dlJson', r.dom_states)}</td>
+    <td>${dlBtn('↓ PNG', 'dlScreenshot', r.screenshot_b64)}</td>
+    <td>${croCellHtml(idx)}</td>
+    <td>${contactCellHtml(idx)}</td>
+    <td class="flex gap-1 flex-wrap">
+      ${st === 'pending' || st === 'error' ? `<button class="btn btn-primary btn-sm" onclick="runOne(${idx})">▶ Run</button>` : ''}
+      ${st === 'done' ? `<button class="btn btn-slate btn-sm" onclick="runOne(${idx})">↺ Re-run</button>` : ''}
+      ${st === 'done' && !r.hunter_data ? `<button class="btn btn-yellow btn-sm" onclick="lookupHunter(${idx})">👤 DM</button>` : ''}
+    </td>
+  </tr>`;
+}
+
+function croCellHtml(idx) {
+  const u   = urls[idx];
+  const r   = results[u.url] || {};
+  if (r.status !== 'done' && r.status !== undefined) return '<span class="text-slate-600 text-xs">—</span>';
+
+  const cro       = r.cro_audit;
+  const isRunning = croRunning.has(idx);
+  const hasScrape = !!r.html;
+
+  const btnLabel = cro ? '↺ Re-run' : '▶ Run CRO';
+  const startBtn = hasScrape
+    ? `<button id="cro-btn-${idx}" class="cro-start-btn" ${isRunning ? 'disabled' : ''} onclick="startCro(${idx})">${
+        isRunning ? '<span class="spinner"></span>Running…' : btnLabel
+      }</button>`
+    : '';
+
+  if (!cro) return startBtn || '<span class="text-slate-600 text-xs">—</span>';
+  if (cro.error) return `<span class="text-red-400 text-xs">Error: ${cro.error.slice(0,30)}</span> ${startBtn}`;
+
+  const s = cro.summary || {};
+  const badges = [
+    s.confirmed_high   > 0 ? `<span class="badge badge-red">${s.confirmed_high} HIGH</span>` : '',
+    s.confirmed_medium > 0 ? `<span class="badge badge-yellow">${s.confirmed_medium} MED</span>` : '',
+    s.verification_required > 0 ? `<span class="badge badge-slate">${s.verification_required} VER</span>` : '',
+    s.gaps_detected    > 0 ? `<span class="badge badge-slate">${s.gaps_detected} GAP</span>` : '',
+  ].filter(Boolean).join(' ');
+
+  return `<div class="flex flex-wrap gap-1 items-center">
+    ${badges}
+    <button class="btn btn-slate btn-sm" onclick="showCroModal(${idx})">Detail</button>
+    <button class="btn btn-green btn-sm" onclick="dlCro(${idx})">↓</button>
+    ${startBtn}
+  </div>`;
+}
+
+function contactCellHtml(idx) {
+  const u = urls[idx];
+  const r = results[u.url] || {};
+  const h = r.hunter_data;
+  if (!h) return '<span class="text-slate-600 text-xs">—</span>';
+  if (!h.found) return '<span class="text-slate-400 text-xs">No contacts</span>';
+  const c = h.top_contacts[0] || {};
+  return `<div class="text-xs">
+    <div class="text-green-400 font-semibold">${c.name || 'Contact'}</div>
+    <div class="text-slate-400">${c.position || ''}</div>
+    <button class="btn btn-green btn-sm mt-1" onclick="dlContact(${idx})">↓ CSV</button>
+  </div>`;
+}
+
+function updateRow(idx) {
+  const row = document.getElementById(`row-${idx}`);
+  if (row) row.outerHTML = rowHtml(idx);
+}
+
+function updateStats() {
+  const total   = urls.length;
+  const done    = Object.values(results).filter(r => r.status === 'done').length;
+  const errors  = Object.values(results).filter(r => r.status === 'error').length;
+  const croDone = Object.values(results).filter(r => r.cro_audit && !r.cro_audit.error).length;
+  document.getElementById('stats').textContent =
+    total ? `${done}/${total} done  •  ${errors} errors  •  ${croDone} CRO` : '';
+}
+
+// ── Run single URL ────────────────────────────────────────────────────────────
+async function runOne(idx) {
+  const u = urls[idx];
+  results[u.url] = {status: 'running'};
+  updateRow(idx);
+
+  const base = apiBase();
+  if (!base) { alert('Set API URL in config'); results[u.url].status = 'pending'; updateRow(idx); return; }
+
+  try {
+    const resp = await fetch(base + '/scrape', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({url: u.url, industry: industry(), run_cro: true}),
+    });
+    const data = await resp.json();
+    if (data.error) {
+      results[u.url] = {status: 'error', error: data.error};
+    } else {
+      results[u.url] = {status: 'done', ...data};
+    }
+  } catch(e) {
+    results[u.url] = {status: 'error', error: e.message};
+  }
+  updateRow(idx);
+  updateStats();
+}
+
+// ── Run all ───────────────────────────────────────────────────────────────────
+async function runAll() {
+  if (running) return;
+  const base = apiBase();
+  if (!base) { alert('Set API URL in config'); return; }
+  if (!urls.length) { alert('Load a file first'); return; }
+  running  = true;
+  stopFlag = false;
+  document.getElementById('btn-stop').disabled = false;
+  document.getElementById('btn-run').disabled  = true;
+
+  const pending = urls.map((_,i) => i).filter(i => {
+    const st = (results[urls[i].url] || {}).status;
+    return !st || st === 'pending' || st === 'error';
+  });
+
+  const workers = workerCount();
+  const pool    = [...pending];
+
+  async function worker() {
+    while (pool.length && !stopFlag) {
+      const idx = pool.shift();
+      await runOne(idx);
+    }
+  }
+
+  await Promise.all(Array.from({length: workers}, worker));
+  running = false;
+  document.getElementById('btn-stop').disabled = true;
+  document.getElementById('btn-run').disabled  = false;
+}
+
+function stopAll() {
+  stopFlag = true;
+  document.getElementById('btn-stop').disabled = true;
+}
+
+function clearAll() {
+  if (!confirm('Clear all data?')) return;
+  urls    = [];
+  results = {};
+  renderTable();
+  updateStats();
+}
+
+// ── CRO per-row start ─────────────────────────────────────────────────────────
+async function startCro(idx) {
+  if (croRunning.has(idx)) return;
+  const u = urls[idx];
+  const r = results[u.url] || {};
+  if (!r.html) { alert('Scrape the URL first (▶ Run)'); return; }
+
+  const base = apiBase();
+  if (!base) { alert('Set API URL'); return; }
+
+  croRunning.add(idx);
+  updateRow(idx);
+
+  try {
+    const resp = await fetch(base + '/cro', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        html:         r.html,
+        dom_elements: (r.dom_states || {}).elements || [],
+        industry:     industry(),
+        url:          u.url,
+      }),
+    });
+    const audit = await resp.json();
+    results[u.url].cro_audit = audit;
+    if (audit && !audit.error) setTimeout(() => dlCro(idx), 200);
+  } catch(e) {
+    results[u.url].cro_audit = {error: e.message};
+  }
+  croRunning.delete(idx);
+  updateRow(idx);
+  updateStats();
+}
+
+// ── Run all CRO ───────────────────────────────────────────────────────────────
+async function runAllCro() {
+  const base = apiBase();
+  if (!base) { alert('Set API URL'); return; }
+
+  const pending = urls.map((_,i) => i).filter(i => {
+    const r = results[urls[i].url] || {};
+    return r.status === 'done' && r.html && (!r.cro_audit || r.cro_audit.error);
+  });
+
+  if (!pending.length) { alert('No scraped pages without CRO data found'); return; }
+
+  const pool    = [...pending];
+  const workers = Math.min(workerCount(), pool.length);
+
+  async function worker() {
+    while (pool.length) {
+      await startCro(pool.shift());
+    }
+  }
+
+  await Promise.all(Array.from({length: workers}, worker));
+}
+
+// ── Hunter.io ─────────────────────────────────────────────────────────────────
+async function lookupHunter(idx) {
+  const u    = urls[idx];
+  const base = apiBase();
+  if (!base) { alert('Set API URL'); return; }
+
+  const key  = hunterKey();
+  const domain = new URL(u.url).hostname.replace('www.','');
+
+  try {
+    const resp = await fetch(base + '/hunter', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({domain, api_key: key}),
+    });
+    const data = await resp.json();
+    results[u.url].hunter_data = data;
+  } catch(e) {
+    results[u.url].hunter_data = {found: false, error: e.message};
+  }
+  updateRow(idx);
+}
+
+// ── Downloads ─────────────────────────────────────────────────────────────────
+function dlHtml(idx) {
+  const r = results[urls[idx].url] || {};
+  if (!r.html) return;
+  _download(r.html, `${safeFilename(urls[idx])}_rendered.html`, 'text/html');
+}
+
+function dlJson(idx) {
+  const r = results[urls[idx].url] || {};
+  if (!r.dom_states) return;
+  _download(JSON.stringify(r.dom_states, null, 2), `${safeFilename(urls[idx])}_dom_states.json`, 'application/json');
+}
+
+function dlScreenshot(idx) {
+  const r = results[urls[idx].url] || {};
+  if (!r.screenshot_b64) return;
+  const a = document.createElement('a');
+  a.href     = 'data:image/png;base64,' + r.screenshot_b64;
+  a.download = `${safeFilename(urls[idx])}_screenshot.png`;
+  a.click();
+}
+
+function dlCro(idx) {
+  const r = results[urls[idx].url] || {};
+  if (!r.cro_audit || r.cro_audit.error) {
+    alert('CRO report not available. Click ▶ Run CRO in the CRO Audit column first.');
+    return;
+  }
+  _download(JSON.stringify(r.cro_audit, null, 2), `${safeFilename(urls[idx])}_cro_audit.json`, 'application/json');
+}
+
+function dlContact(idx) {
+  const r = results[urls[idx].url] || {};
+  const h = r.hunter_data;
+  if (!h || !h.found) return;
+  const rows = [['Name','Email','Position','Score']];
+  for (const c of (h.top_contacts || [])) {
+    rows.push([c.name, c.email, c.position, c.score]);
+  }
+  const csv = rows.map(r => r.map(v => `"${(v||'').toString().replace(/"/g,'""')}"`).join(',')).join('\n');
+  _download(csv, `${safeFilename(urls[idx])}_contacts.csv`, 'text/csv');
+}
+
+function downloadAll() {
+  const tasks = [];
+  urls.forEach((u, i) => {
+    const r = results[u.url];
+    if (!r || r.status !== 'done') return;
+    if (r.html)            tasks.push(() => dlHtml(i));
+    if (r.dom_states)      tasks.push(() => dlJson(i));
+    if (r.screenshot_b64)  tasks.push(() => dlScreenshot(i));
+    if (r.cro_audit && !r.cro_audit.error) tasks.push(() => dlCro(i));
+    if (r.hunter_data && r.hunter_data.found) tasks.push(() => dlContact(i));
+  });
+  if (!tasks.length) { alert('No completed results to download'); return; }
+  tasks.forEach((fn, i) => setTimeout(fn, i * 80));
+}
+
+function _download(content, filename, type) {
+  const blob = new Blob([content], {type});
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function safeFilename(u) {
+  return (u.name || u.url).replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 60);
+}
+
+// ── CRO Modal ────────────────────────────────────────────────────────────────
+function showCroModal(idx) {
+  const u   = urls[idx];
+  const r   = results[u.url] || {};
+  const cro = r.cro_audit;
+  if (!cro || cro.error) return;
+
+  document.getElementById('cro-modal-title').textContent = `CRO Report — ${u.name || u.url}`;
+
+  const m = cro.meta || {};
+  document.getElementById('cro-modal-meta').textContent =
+    `Industry: ${m.industry || '—'}  •  Generated: ${(m.generated_at || '').slice(0,19).replace('T',' ')}`;
+
+  const s = cro.summary || {};
+  document.getElementById('cro-modal-summary').innerHTML = [
+    `<span class="badge badge-red text-sm px-2 py-1">${s.confirmed_high || 0} High</span>`,
+    `<span class="badge badge-yellow text-sm px-2 py-1">${s.confirmed_medium || 0} Medium</span>`,
+    `<span class="badge badge-slate text-sm px-2 py-1">${s.verification_required || 0} Verify</span>`,
+    `<span class="badge badge-slate text-sm px-2 py-1">${s.suppressed || 0} Suppressed</span>`,
+    `<span class="badge badge-slate text-sm px-2 py-1">${s.gaps_detected || 0} Gaps</span>`,
+  ].join('');
+
+  const issues = cro.issues || [];
+  document.getElementById('cro-modal-issues').innerHTML = issues.map(issue => {
+    const sev   = issue.severity || 'low';
+    const dec   = issue.decision || 'confirmed';
+    const decBadge = dec === 'suppressed' ? '<span class="badge badge-slate">suppressed</span>'
+      : dec === 'verification_required'  ? '<span class="badge badge-yellow">verify</span>'
+      : '<span class="badge badge-green">confirmed</span>';
+
+    return `<div class="issue-card ${sev} ${issue.origin === 'gap_detector' ? 'gap' : ''}">
+      <div class="flex gap-2 items-start flex-wrap mb-1">
+        <span class="badge ${sev === 'high' ? 'badge-red' : sev === 'medium' ? 'badge-yellow' : 'badge-slate'}">${sev.toUpperCase()}</span>
+        ${decBadge}
+        <span class="font-semibold text-sm">${issue.title || issue.id}</span>
+      </div>
+      ${(issue.findings||[]).map(f => `<div class="text-xs text-slate-300 mb-1">• ${f}</div>`).join('')}
+      ${issue.fix ? `<div class="text-xs text-indigo-300 mt-1 border-t border-slate-700 pt-1"><strong>Fix:</strong> ${issue.fix}</div>` : ''}
+      ${issue.revenue_signal ? `<div class="text-xs text-green-400 mt-1">${issue.revenue_signal}</div>` : ''}
+    </div>`;
+  }).join('') || '<div class="text-slate-400 text-sm">No issues found.</div>';
+
+  document.getElementById('cro-modal').style.display = 'flex';
+}
+
+function closeCroModal() {
+  document.getElementById('cro-modal').style.display = 'none';
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+loadConfig();
+pingApi();
+</script>
+</body>
+</html>
