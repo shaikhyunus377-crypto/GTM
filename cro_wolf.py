@@ -574,7 +574,6 @@ GAP_DESCRIPTIONS = {
     "schema_incomplete":  "Schema.org completeness check expected for local business",
     "conversion_form":    "Conversion form check expected for this industry",
     "lazy_load_images":   "Image lazy-load check expected for this industry",
-    "cta_label_quality":  "CTA label quality check expected but not found",
     "cta_above_fold":     "Above-the-fold CTA check was expected but not found",
     "social_proof":       "Social proof check was expected but not found",
     "trust_signals":      "Trust signals check was expected but not found",
@@ -621,7 +620,7 @@ EVALUATOR_MAP = {
     "h1_missing":        (eval_h1,                "h1_ev"),
     "heading_hierarchy": (eval_headings,          "heading_ev"),
     "duplicate_ids":     (eval_dupe_ids,          "dupe_ev"),
-    "cta_label_quality": (eval_cta_labels,        "cta_ev"),
+    # cta_label_quality removed — replaced by bot_ai_cro semantic analysis
     "og_social_meta":    (eval_og_meta,           "og_ev"),
     "schema_incomplete": (eval_schema,            "schema_ev"),
     "schema_missing":    (eval_schema,            "schema_ev"),
@@ -633,6 +632,7 @@ EVALUATOR_MAP = {
     "social_proof":      (eval_social_proof,      "social_ev"),
     "trust_signals":     (eval_trust_signals,     "trust_ev"),
     "mobile_tap_targets":(eval_mobile_tap_targets,"tap_ev"),
+    # ai_cro_analysis: no wolf eval needed — GPT already validated findings
 }
 
 

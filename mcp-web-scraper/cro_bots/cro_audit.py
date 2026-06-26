@@ -11,7 +11,6 @@ from . import (
     bot_h1,
     bot_headings,
     bot_dupe_ids,
-    bot_cta_labels,
     bot_og_meta,
     bot_schema,
     bot_page_meta,
@@ -22,13 +21,13 @@ from . import (
     bot_social_proof,
     bot_trust_signals,
     bot_mobile_tap,
+    bot_ai_cro,
 )
 
 BOTS = [
     bot_h1,
     bot_headings,
     bot_dupe_ids,
-    bot_cta_labels,
     bot_og_meta,
     bot_schema,
     bot_page_meta,
@@ -39,6 +38,7 @@ BOTS = [
     bot_social_proof,
     bot_trust_signals,
     bot_mobile_tap,
+    bot_ai_cro,     # AI semantic analysis — runs last; no-op without OPENAI_API_KEY
 ]
 
 SEVERITY_ORDER = {"high": 0, "medium": 1, "low": 2}

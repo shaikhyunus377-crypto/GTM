@@ -60,6 +60,7 @@ class AuditParser(HTMLParser):
         self.title_text: str        = ""
         self.meta_desc:  str        = ""
         self.tel_hrefs:  list[str]  = []
+        self.raw_html:   str        = ""   # full HTML (stored on feed)
 
         self._in_title     = False
         self._in_script    = False
@@ -71,6 +72,10 @@ class AuditParser(HTMLParser):
         self._in_link      = False
         self._link_href    = ""
         self._link_buf     = ""
+
+    def feed(self, data: str) -> None:
+        self.raw_html = data
+        super().feed(data)
 
     # ── Tag open ─────────────────────────────────────────────────────────────
 
