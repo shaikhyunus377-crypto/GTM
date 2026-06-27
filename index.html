@@ -172,6 +172,20 @@
 </div>
 
 <!-- CRO Detail Modal -->
+<!-- Screenshot modal -->
+<div id="ss-modal" class="modal-bg" style="display:none" onclick="if(event.target===this)closeScreenshot()">
+  <div class="modal-box" style="max-width:90vw;width:auto">
+    <div class="flex justify-between items-center mb-3">
+      <span class="font-semibold text-white" id="ss-modal-title">Screenshot</span>
+      <div class="flex gap-2">
+        <button class="btn btn-slate btn-sm" onclick="dlScreenshot()">↓ Download</button>
+        <button class="text-slate-400 hover:text-white text-xl" onclick="closeScreenshot()">✕</button>
+      </div>
+    </div>
+    <img id="ss-modal-img" src="" alt="screenshot" style="max-width:100%;max-height:80vh;border-radius:.375rem;display:block"/>
+  </div>
+</div>
+
 <div id="cro-modal" class="modal-bg" style="display:none" onclick="if(event.target===this)closeCroModal()">
   <div class="modal-box">
     <div class="flex justify-between items-start mb-4">
@@ -387,6 +401,11 @@ function actionsCell(idx) {
   // CRO button
   if (r.html && !croRunning.has(idx)) {
     parts.push(`<button class="btn btn-purple btn-sm" onclick="startCro(${idx})">${r.cro_audit ? '↺ CRO' : '⚙ CRO'}</button>`);
+  }
+
+  // Screenshot button — show when screenshot captured
+  if (r.screenshot_b64) {
+    parts.push(`<button class="btn btn-slate btn-sm" onclick="showScreenshot(${idx})">🖼 SS</button>`);
   }
 
   // Download CSV of contacts
@@ -727,6 +746,30 @@ function showCroModal(idx) {
   document.getElementById('cro-modal').style.display = 'flex';
 }
 function closeCroModal() { document.getElementById('cro-modal').style.display = 'none'; }
+
+// ── Screenshot modal ──────────────────────────────────────────────────────────
+let _ssIdx = null;
+function showScreenshot(idx) {
+  const r = results[urls[idx].url] || {};
+  if (!r.screenshot_b64) return;
+  _ssIdx = idx;
+  document.getElementById('ss-modal-title').textContent = urls[idx].url.replace(/https?:\/\//, '');
+  document.getElementById('ss-modal-img').src = 'data:image/png;base64,' + r.screenshot_b64;
+  document.getElementById('ss-modal').style.display = 'flex';
+}
+function closeScreenshot() {
+  document.getElementById('ss-modal').style.display = 'none';
+  document.getElementById('ss-modal-img').src = '';
+}
+function dlScreenshot() {
+  if (_ssIdx === null) return;
+  const r = results[urls[_ssIdx].url] || {};
+  if (!r.screenshot_b64) return;
+  const a = document.createElement('a');
+  a.href = 'data:image/png;base64,' + r.screenshot_b64;
+  a.download = urls[_ssIdx].url.replace(/https?:\/\//, '').replace(/[^a-z0-9]/gi, '_') + '.png';
+  a.click();
+}
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 loadConfig();
