@@ -426,7 +426,7 @@ function rowCells(u, i) {
     <td class="px-3 py-3" id="email-${i}">${emailHtml(hd)}</td>
     <td class="px-3 py-3" id="phone-${i}">${phoneHtml(hd)}</td>
     <td class="px-3 py-3 text-slate-300 text-xs" id="elems-${i}">
-      ${hasDone ? (r.dom_summary ? r.dom_summary.total_elements : 0) : '&mdash;'}
+      ${hasDone ? ((r.dom_states && r.dom_states.elements) ? r.dom_states.elements.length : 0) : '&mdash;'}
     </td>
     <td class="px-3 py-3" id="cro-${i}">${croCellHtml(i)}</td>
     <td class="px-3 py-3" id="thumb-${i}">${thumb}</td>
@@ -465,7 +465,7 @@ function updateRow(idx) {
   const em = $('email-' + idx); if (em) em.innerHTML = emailHtml(hd);
   const ph = $('phone-' + idx); if (ph) ph.innerHTML = phoneHtml(hd);
   const el = $('elems-' + idx);
-  if (el) el.textContent = hasDone ? (r.dom_summary ? r.dom_summary.total_elements : 0) : '—';
+  if (el) el.textContent = hasDone ? ((r.dom_states && r.dom_states.elements) ? r.dom_states.elements.length : 0) : '—';
 
   const cr = $('cro-' + idx); if (cr) cr.innerHTML = croCellHtml(idx);
 
@@ -529,19 +529,64 @@ async function scrapeOne(u) {
   results[u.url] = { status: 'running' };
   updateRow(u.idx);
   try {
-    const body = { url: u.url, industry: industry() };
-    if (hunterKey()) body.hunter_api_key = hunterKey();
-    if (skipHunt())  body.skip_hunter   = true;
+    let hunter_data = null;
+
+    // Step 1: Hunter.io DM lookup — only when a key is provided and not skipped
+    if (hunterKey() && !skipHunt()) {
+      let domain;
+      try { domain = new URL(u.url).hostname.replace(/^www\./, ''); }
+      catch { domain = u.url; }
+      try {
+        const hr = await fetch(apiBase() + '/hunter', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ domain, api_key: hunterKey() }),
+        });
+        const hd = await hr.json();
+        if (!hr.ok) {
+          // Hunter API error — record it but continue scraping
+          hunter_data = { found: false, error: hd.error || ('HTTP ' + hr.status) };
+        } else if (hd.found && hd.top_contacts && hd.top_contacts.length > 0) {
+          const c = hd.top_contacts[0];
+          const nameParts = (c.name || '').trim().split(/\s+/);
+          hunter_data = {
+            found:      true,
+            first_name: nameParts[0] || '',
+            last_name:  nameParts.slice(1).join(' ') || '',
+            title:      c.position || '',
+            email:      c.email    || '',
+            phone:      '',
+            confidence: c.score    || 0,
+            domain:     hd.domain,
+          };
+        } else {
+          // No decision maker found — mark row and skip scraping
+          hunter_data = { found: false, domain: hd.domain,
+                          error: hd.error || null, total: hd.total || 0 };
+          results[u.url] = { status: 'no_dm', hunter_data };
+          updateRow(u.idx);
+          return;
+        }
+      } catch (e) {
+        // Network error talking to /hunter — note it but proceed with scraping
+        hunter_data = { found: false, error: e.message };
+      }
+    }
+
+    // Step 2: Scrape the URL
     const resp = await fetch(apiBase() + '/scrape', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ url: u.url, industry: industry(), run_cro: true }),
     });
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
     const data = await resp.json();
-    if (data.error)            results[u.url] = { status: 'error', error: data.error };
-    else if (data.no_decision_maker) results[u.url] = { status: 'no_dm', hunter_data: data.hunter_data };
-    else                       results[u.url] = { ...data, status: 'done' };
+
+    if (data.error) {
+      results[u.url] = { status: 'error', error: data.error, hunter_data };
+    } else {
+      results[u.url] = { ...data, status: 'done', hunter_data };
+    }
   } catch (err) {
     results[u.url] = { status: 'error', error: err.message };
   }
@@ -762,7 +807,7 @@ function exportCsv() {
       i + 1, u.url, r.status || 'pending',
       hd.first_name || '', hd.last_name || '', hd.title || '',
       hd.email || '', hd.phone || '', hd.confidence || '',
-      r.dom_summary ? r.dom_summary.total_elements : '',
+      (r.dom_states && r.dom_states.elements) ? r.dom_states.elements.length : '',
       cs.confirmed_high  !== undefined ? cs.confirmed_high  : '',
       cs.confirmed_medium !== undefined ? cs.confirmed_medium : '',
       cs.gaps_detected   !== undefined ? cs.gaps_detected   : '',
