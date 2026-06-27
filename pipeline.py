@@ -50,10 +50,7 @@ _jobs: dict[str, dict] = {}
 # APIFY  —  Google Maps scraper
 # ─────────────────────────────────────────────────────────────────────────────
 
-APIMY_ACTOR = "compass~crawler-google-places"
-APIMY_RUN   = f"https://api.apify.com/v2/acts/{APIFY_ACTOR}/runs"
-APIMY_RUN_STATUS = "https://api.apify.com/v2/actor-runs/{run_id}"
-APIMY_DATASET    = "https://api.apify.com/v2/datasets/{dataset_id}/items"
+APIF_ACTOR = "compass~crawler-google-places"
 
 
 async def apify_search(
@@ -74,7 +71,7 @@ async def apify_search(
         payload["countryCode"] = country.lower()
 
     run_resp = await client.post(
-        f"https://api.apify.com/v2/acts/{APIFY_ACTOR}/runs",
+        f"https://api.apify.com/v2/acts/{APIF_ACTOR}/runs",
         params={"token": token},
         json=payload,
         timeout=30,
@@ -366,7 +363,7 @@ def _pitch_angle(issues: list[dict]) -> str:
     main = (high or issues)[0]
     title = main.get("title", "")
     severity = main.get("severity", "medium")
-    prefix = "🚨 Critical" if severity == "high" else "⚠️ Important"
+    prefix = "\U0001f6a8 Critical" if severity == "high" else "⚠️ Important"
     return f"{prefix}: {title}"
 
 
@@ -666,7 +663,7 @@ async def handle_pipeline_sync(request: Request) -> JSONResponse:
     """
     POST /pipeline/sync
     Same as /pipeline but waits and returns results directly.
-    Use only for small counts (<=5 leads) to avoid timeout.
+    Use only for small counts (<=10 leads) to avoid timeout.
     """
     body            = await request.json()
     token           = body.get("apify_token", "").strip()
