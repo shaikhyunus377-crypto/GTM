@@ -234,7 +234,6 @@ def scrape_sync(url: str, run_cro: bool = True, industry: str = "all") -> dict:
 
 
 # ── Request handlers ─────────────────────────────────────────────────────────────────────────
-from __future__ import annotations  # noqa: F811 — re-import guard
 
 async def healthcheck(request: Request):
     return JSONResponse({
