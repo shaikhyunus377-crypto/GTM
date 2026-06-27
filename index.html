@@ -454,7 +454,7 @@ async function apifySearch(token, searchTerm, maxResults, country) {
         searchStringsArray:        [searchTerm],
         maxCrawledPlacesPerSearch: Math.min(maxResults + 30, 200),
         language:                  'en',
-        countryCode:               country || undefined,
+        countryCode:               country ? country.toLowerCase() : undefined,
         skipClosedPlaces:          true,
       }),
     }
