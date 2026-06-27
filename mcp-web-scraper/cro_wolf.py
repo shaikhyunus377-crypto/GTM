@@ -654,6 +654,43 @@ def eval_ai_social_proof_near_cta(issue: dict, ev: dict):
     )
 
 
+# ── Page structure evaluators ───────────────────────────────────────────────
+
+def eval_hero_carousel(issue: dict, ev: dict):
+    """Carousel detection is HTML pattern match — already high confidence."""
+    confirm(issue, 85, "carousel_pattern_detected_in_html", ["html"])
+
+
+def eval_nav_overload(issue: dict, ev: dict):
+    """Nav item count is deterministic from DOM."""
+    nav_count = len(issue.get("affected_elements", []))
+    if nav_count >= 7:
+        confirm(issue, 80, f"dom_shows_{nav_count}_nav_items_above_y200", ["dom_states.json"])
+    elif nav_count >= 5:
+        issue["decision"]         = "verification_required"
+        issue["confidence_score"] = 55
+        issue.setdefault("decision_reasons", []).append(
+            f"wolf: only {nav_count} nav items detected — below threshold of 7"
+        )
+    else:
+        suppress(issue, f"dom_shows_only_{nav_count}_nav_items_below_threshold")
+
+
+def eval_cta_hierarchy(issue: dict, ev: dict):
+    """CTA count above fold is deterministic from DOM."""
+    cta_count = len(issue.get("affected_elements", []))
+    if cta_count >= 6:
+        confirm(issue, 80, f"dom_confirms_{cta_count}_competing_ctas_above_fold", ["dom_states.json"])
+    elif cta_count >= 4:
+        issue["decision"]         = "verification_required"
+        issue["confidence_score"] = 60
+        issue.setdefault("decision_reasons", []).append(
+            f"wolf: {cta_count} CTAs above fold — below high-confidence threshold of 6"
+        )
+    else:
+        suppress(issue, f"dom_shows_only_{cta_count}_fold_ctas_below_threshold")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  GAP DETECTION
 # ─────────────────────────────────────────────────────────────────────────────
@@ -744,6 +781,10 @@ EVALUATOR_MAP = {
     "hero_action_clarity":       (eval_ai_hero_action_clarity,     "fold_ev"),
     "offer_clarity":             (eval_ai_offer_clarity,           "fold_ev"),
     "social_proof_near_cta":     (eval_ai_social_proof_near_cta,   "social_ev"),
+    # Page structure findings from bot_page_structure
+    "hero_carousel":             (eval_hero_carousel,               "og_ev"),   # ev unused
+    "nav_overload":              (eval_nav_overload,                "og_ev"),   # ev unused
+    "cta_hierarchy":             (eval_cta_hierarchy,               "fold_ev"),
 }
 
 

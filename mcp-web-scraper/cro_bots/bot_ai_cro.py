@@ -96,28 +96,35 @@ def _extract_page_context(p: AuditParser, dom_elements: list) -> dict:
 
 SYSTEM_PROMPT = """You are a senior CRO analyst auditing a landing page for conversion friction.
 
-STRICT RULES — violate any of these and your output is rejected:
-1. Every finding's `evidence` array MUST quote actual text from the page_context I provide.
-   - BAD:  "No primary CTA detected"
-   - GOOD: "Above-fold CTAs detected: 'Explore Services' (a, y=420), 'View All' (a, y=510). No booking-intent CTA."
-2. `confidence` must match the finding type:
-   - Missing booking CTA (verifiable): 70–80
-   - Weak value proposition (subjective): 75–85
-   - Generic CTA label (contextual): 50–65
-   - Social proof proximity (layout-dependent): 60–75
-3. Each finding must be a SEPARATE atomic issue with a stable snake_case `id`.
-4. Return ONLY findings you are highly confident are real problems on THIS page.
-5. If the page has a booking CTA above fold, do NOT flag hero_primary_cta_missing.
-6. `fix` must be specific to what's detected — no generic advice.
-7. Maximum 4 findings. Fewer is better.
-8. `finding` must explain WHY this hurts conversions, not just describe the absence.
+CRITICAL: The page_context includes `site_type`. Adapt your analysis to the business model:
+- "dental" / "medical" / "local_business": Book appointment, insurance, reviews, call CTA
+- "association": Membership value, join CTA, member benefits, renewal, advocacy
+- "saas": Trial CTA, pricing clarity, feature benefits, integration proof
+- "ecommerce": Product clarity, buy CTA, shipping/returns, reviews
+- "nonprofit": Donate CTA, mission clarity, impact proof
+- "restaurant": Reservation CTA, menu clarity, hours
 
-Valid finding IDs (use only these):
-- hero_primary_cta_missing    (no booking/scheduling CTA in first 900px)
-- hero_value_proposition      (hero doesn't answer why this business over competitors)
-- hero_action_clarity         (CTA labels encourage exploration not conversion)
-- offer_clarity               (no specific offer, discount, or incentive visible)
-- social_proof_near_cta       (reviews/ratings not proximate to primary CTA)
+STRICT RULES:
+1. Every finding's `evidence` MUST quote actual detected text from page_context.
+   BAD: "No primary CTA detected"
+   GOOD: "Above-fold CTAs: 'Explore Services' (a, y=420), 'View All' (a, y=510). No booking-intent CTA."
+2. Adapt findings to the site_type — do NOT apply dental rules to associations.
+3. `confidence` calibration:
+   - Verifiable (missing CTA, no booking link): 70–80
+   - Subjective (weak value prop): 75–85
+   - Very subjective (label style): 50–65
+4. Each finding is a SEPARATE atomic issue with a stable snake_case `id`.
+5. Return ONLY findings you are highly confident are real problems.
+6. `fix` must reference what was detected — no generic advice.
+7. Maximum 3 findings. Fewer is better.
+8. `finding` must explain WHY it hurts conversions for THIS type of site.
+
+Valid finding IDs:
+- hero_primary_cta_missing    (no primary conversion CTA in first 900px for this site type)
+- hero_value_proposition      (hero doesn't answer: why choose this org/service over alternatives?)
+- hero_action_clarity         (CTAs encourage browsing instead of the primary conversion action)
+- offer_clarity               (no specific offer, incentive, or membership benefit visible above fold)
+- social_proof_near_cta       (no social proof proximate to the primary CTA — only if you can verify distance)
 
 Respond ONLY with valid JSON:
 {
@@ -176,12 +183,13 @@ def _call_openai(context: dict) -> list[dict]:
         return [{"_error": str(exc)}]
 
 
-def run(p: AuditParser | None = None, dom_elements: list | None = None) -> list[dict] | None:
+def run(p: AuditParser | None = None, dom_elements: list | None = None, site_type: str = "local_business") -> list[dict] | None:
     """Returns a LIST of atomic issue dicts, or None if nothing to report."""
     if not OPENAI_API_KEY:
         return None
 
     ctx = _extract_page_context(p or AuditParser(), dom_elements or [])
+    ctx["site_type"] = site_type
     raw = _call_openai(ctx)
 
     valid_ids = {

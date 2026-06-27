@@ -124,6 +124,9 @@ _AI_HERO_REGION = {
 # Static regions for deterministic findings without elements
 _STATIC_REGION = {
     "cta_above_fold":  (0, 800),
+    "hero_carousel":   (0, 900),
+    "cta_hierarchy":   (0, 900),
+    "nav_overload":    (0, 200),
 }
 
 
