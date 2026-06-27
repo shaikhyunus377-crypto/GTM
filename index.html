@@ -310,7 +310,8 @@ function contactCellHtml(idx) {
   const r = results[u.url] || {};
   const h = r.hunter_data;
   if (!h) return '<span class="text-slate-600 text-xs">—</span>';
-  if (!h.found) return '<span class="text-slate-400 text-xs">No contacts</span>';
+  if (h.error)  return `<span class="text-red-400 text-xs" title="${h.error}">Error</span>`;
+  if (!h.found) return `<span class="text-slate-400 text-xs" title="Domain: ${h.domain || '?'} | Total found: ${h.total ?? 0}">No contacts</span>`;
   const c = h.top_contacts[0] || {};
   return `<div class="text-xs">
     <div class="text-green-400 font-semibold">${c.name || 'Contact'}</div>
@@ -481,7 +482,11 @@ async function lookupHunter(idx) {
       body: JSON.stringify({domain, api_key: key}),
     });
     const data = await resp.json();
-    results[u.url].hunter_data = data;
+    if (!resp.ok) {
+      results[u.url].hunter_data = {found: false, error: data.error || `HTTP ${resp.status}`};
+    } else {
+      results[u.url].hunter_data = data;
+    }
   } catch(e) {
     results[u.url].hunter_data = {found: false, error: e.message};
   }
