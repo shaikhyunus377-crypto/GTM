@@ -945,7 +945,7 @@ function dlScreenshot() {
   if (!r.screenshot_b64) return;
   const a=document.createElement('a');
   a.href='data:image/png;base64,'+r.screenshot_b64;
-  a.download=urls[_ssIdx].url.replace(/https?:\///,'').replace(/[^a-z0-9]/gi,'_')+'.png';
+  a.download=urls[_ssIdx].url.replace(/https?:\/\//,'').replace(/[^a-z0-9]/gi,'_')+'.png';
   a.click();
 }
 
