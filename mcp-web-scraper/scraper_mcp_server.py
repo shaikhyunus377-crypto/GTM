@@ -47,7 +47,7 @@ except ImportError as e:
 SCRAPINGBEE_API_KEY = os.environ.get("SCRAPINGBEE_API_KEY", "")
 HUNTER_API_KEY      = os.environ.get("HUNTER_API_KEY", "")
 PORT                = int(os.environ.get("PORT", 8000))
-SERVER_VERSION      = "2.2.0"
+SERVER_VERSION      = "2.3.0"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -158,7 +158,7 @@ def scrape_sync(url: str, run_cro: bool = True, industry: str = "all") -> dict:
     try:
         resp = client.get(url, params={
             "render_js":   "true",
-            "wait":        "8000",
+            "wait":        "3500",
             "window_width":  "1440",
             "window_height": "2000",
             "js_scenario": {"instructions": [{"evaluate": COORDINATE_JS}]},
@@ -191,13 +191,13 @@ def scrape_sync(url: str, run_cro: bool = True, industry: str = "all") -> dict:
     try:
         ss = client.get(url, params={
             "render_js":             "true",
-            "wait":                  "4500",
+            "wait":                  "2500",
             "screenshot":            "true",
             "screenshot_full_page":  "true",
             "window_width":          "1440",
             "block_ads":             "true",
         })
-        if ss.status_code == 200 and len(ss.content) <= 2_000_000:
+        if ss.status_code == 200 and len(ss.content) <= 1_500_000:
             result["screenshot_b64"] = base64.b64encode(ss.content).decode()
     except Exception as exc:
         log.warning("Screenshot error: %s", exc)
@@ -242,7 +242,7 @@ async def handle_scrape(request: Request):
         return JSONResponse({"error": "url must start with http:// or https://"}, status_code=400)
 
     industry = (body.get("industry") or "all").strip()
-    run_cro  = body.get("run_cro", True)
+    run_cro  = body.get("run_cro", False)
 
     loop   = asyncio.get_event_loop()
     result = await loop.run_in_executor(None, scrape_sync, url, run_cro, industry)
