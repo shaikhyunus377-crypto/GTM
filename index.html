@@ -16,6 +16,7 @@
   .btn-yellow{background:#d97706;color:#fff}.btn-yellow:not(:disabled):hover{background:#b45309}
   .btn-slate{background:#334155;color:#cbd5e1}.btn-slate:not(:disabled):hover{background:#475569}
   .btn-purple{background:#7c3aed;color:#fff}.btn-purple:not(:disabled):hover{background:#6d28d9}
+  .btn-teal{background:#0d9488;color:#fff}.btn-teal:not(:disabled):hover{background:#0f766e}
   .btn-sm{padding:.25rem .65rem;font-size:.72rem}
   .spinner{display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .6s linear infinite;flex-shrink:0}
   @keyframes spin{to{transform:rotate(360deg)}}
@@ -41,6 +42,8 @@
   .drop-zone{border:2px dashed #334155;border-radius:.75rem;transition:.2s}
   .drop-zone.over{border-color:#6366f1;background:#1e1b4b22}
   .stat-pill{background:#1e293b;border:1px solid #334155;border-radius:.5rem;padding:.3rem .8rem;font-size:.78rem;display:flex;gap:.35rem;align-items:center}
+  .leads-progress-bar{height:6px;background:#334155;border-radius:3px;overflow:hidden;margin-top:.5rem}
+  .leads-progress-fill{height:100%;background:#0d9488;border-radius:3px;transition:width .3s}
 </style>
 </head>
 <body class="min-h-screen">
@@ -65,6 +68,10 @@
     <input id="hunter-key" type="text" placeholder="(optional)" class="w-44" oninput="saveConfig()"/>
   </div>
   <div>
+    <div class="text-xs text-slate-400 mb-1">Apify Key</div>
+    <input id="apify-key" type="text" placeholder="(for Get Leads)" class="w-44" oninput="saveConfig()"/>
+  </div>
+  <div>
     <div class="text-xs text-slate-400 mb-1">Industry</div>
     <select id="industry" onchange="saveConfig()">
       <option value="all">All</option>
@@ -85,7 +92,7 @@
       <option value="5">5</option>
     </select>
   </div>
-  <button class="btn btn-slate btn-sm" onclick="pingApi()">⟳ Ping</button>
+  <button class="btn btn-slate btn-sm" onclick="pingApi()">&#x27F3; Ping</button>
 </div>
 
 <!-- Drop zone (hidden once file loaded) -->
@@ -139,14 +146,15 @@
     </div>
   </div>
 
-  <!-- Run button (big) -->
-  <div class="flex gap-2 mb-4">
+  <!-- Run buttons -->
+  <div class="flex gap-2 mb-4 flex-wrap">
     <button id="btn-run" class="btn btn-primary" onclick="runAll()">▶ Run All</button>
     <button id="btn-stop" class="btn btn-slate" onclick="stopAll()" disabled>■ Stop</button>
     <label class="btn btn-slate btn-sm cursor-pointer">
       📂 New file
       <input type="file" accept=".xlsx,.xls,.csv" class="hidden" onchange="handleFile(this)"/>
     </label>
+    <button class="btn btn-teal btn-sm" onclick="openLeadsModal()">🎯 Get Leads</button>
   </div>
 
   <!-- Table -->
@@ -167,6 +175,90 @@
         </thead>
         <tbody id="table-body"></tbody>
       </table>
+    </div>
+  </div>
+</div>
+
+<!-- Get Leads Modal -->
+<div id="leads-modal" class="modal-bg" style="display:none" onclick="if(event.target===this)closeLeadsModal()">
+  <div class="modal-box" style="max-width:36rem">
+    <div class="flex justify-between items-center mb-4">
+      <div class="font-bold text-lg text-white">🎯 Get Leads from Google Maps</div>
+      <button class="text-slate-400 hover:text-white text-xl" onclick="closeLeadsModal()">✕</button>
+    </div>
+
+    <div class="grid grid-cols-2 gap-3 mb-3">
+      <div>
+        <div class="text-xs text-slate-400 mb-1">Niche *</div>
+        <input id="leads-niche" type="text" placeholder="e.g. dental clinic" class="w-full"
+          list="niche-suggestions"/>
+        <datalist id="niche-suggestions">
+          <option value="dental clinic"/><option value="dentist"/>
+          <option value="medical clinic"/><option value="doctor office"/>
+          <option value="chiropractor"/><option value="physiotherapy"/>
+          <option value="law firm"/><option value="attorney"/>
+          <option value="restaurant"/><option value="cafe"/>
+          <option value="gym"/><option value="fitness center"/>
+          <option value="hair salon"/><option value="beauty salon"/>
+          <option value="plumber"/><option value="electrician"/>
+          <option value="HVAC"/><option value="roofing company"/>
+          <option value="real estate agent"/><option value="mortgage broker"/>
+          <option value="accountant"/><option value="insurance agent"/>
+          <option value="auto repair"/><option value="car dealership"/>
+          <option value="hotel"/><option value="spa"/>
+        </datalist>
+      </div>
+      <div>
+        <div class="text-xs text-slate-400 mb-1">Country</div>
+        <select id="leads-country" class="w-full">
+          <option value="">Any</option>
+          <option value="US">United States</option>
+          <option value="GB">United Kingdom</option>
+          <option value="CA">Canada</option>
+          <option value="AU">Australia</option>
+          <option value="IN">India</option>
+          <option value="DE">Germany</option>
+          <option value="FR">France</option>
+          <option value="AE">UAE</option>
+          <option value="SG">Singapore</option>
+          <option value="PK">Pakistan</option>
+          <option value="NG">Nigeria</option>
+          <option value="ZA">South Africa</option>
+        </select>
+      </div>
+      <div>
+        <div class="text-xs text-slate-400 mb-1">City or Zip Code *</div>
+        <input id="leads-location" type="text" placeholder="e.g. New York or 10001" class="w-full"/>
+      </div>
+      <div>
+        <div class="text-xs text-slate-400 mb-1">Lead Count *</div>
+        <input id="leads-count" type="number" value="50" min="1" max="500" class="w-full"/>
+      </div>
+      <div>
+        <div class="text-xs text-slate-400 mb-1">Min Google Reviews</div>
+        <input id="leads-min-reviews" type="number" value="0" min="0" class="w-full"/>
+      </div>
+      <div>
+        <div class="text-xs text-slate-400 mb-1">Max Google Reviews</div>
+        <input id="leads-max-reviews" type="number" value="" placeholder="No limit" class="w-full"/>
+      </div>
+    </div>
+
+    <!-- Live status -->
+    <div id="leads-status-wrap" class="hidden card p-3 mb-3">
+      <div class="text-xs text-slate-300 mb-1" id="leads-status-text"></div>
+      <div class="leads-progress-bar">
+        <div class="leads-progress-fill" id="leads-progress-fill" style="width:0%"></div>
+      </div>
+      <div class="text-xs text-slate-500 mt-1" id="leads-kw-text"></div>
+    </div>
+
+    <div class="flex gap-2 justify-end">
+      <button class="btn btn-slate" onclick="closeLeadsModal()">Cancel</button>
+      <button id="btn-leads-search" class="btn btn-teal" onclick="startLeadsSearch()">
+        <span class="spinner hidden" id="leads-spinner"></span>
+        🔍 Search
+      </button>
     </div>
   </div>
 </div>
@@ -201,18 +293,21 @@
 </div>
 
 <script>
-// ── State ─────────────────────────────────────────────────────────────────────────────
+// ── State ────────────────────────────────────────────────────────────────────────────────────
+// url → {status, html, dom_states, screenshot_b64, screenshot_error, cro_audit, hunter_data, error}
 let urls          = [];
 let results       = {};
 let running       = false;
 let stopFlag      = false;
 let croRunning    = new Set();
 let hunterRunning = new Set();
+let leadsAbort    = false;
 
-// ── Config ────────────────────────────────────────────────────────────────────────────
+// ── Config ──────────────────────────────────────────────────────────────────────────────────
 const cfg = {
   api:      () => { let v = (document.getElementById('api-url').value || '').trim().replace(/\/$/, ''); if (v && !v.startsWith('http')) v = 'https://' + v; return v; },
   hunter:   () => document.getElementById('hunter-key').value.trim(),
+  apify:    () => document.getElementById('apify-key').value.trim(),
   industry: () => document.getElementById('industry').value,
   workers:  () => parseInt(document.getElementById('workers').value) || 2,
 };
@@ -220,17 +315,19 @@ const cfg = {
 function saveConfig() {
   localStorage.setItem('gtm_api',      document.getElementById('api-url').value);
   localStorage.setItem('gtm_hunter',   document.getElementById('hunter-key').value);
+  localStorage.setItem('gtm_apify',    document.getElementById('apify-key').value);
   localStorage.setItem('gtm_industry', document.getElementById('industry').value);
   localStorage.setItem('gtm_workers',  document.getElementById('workers').value);
 }
 function loadConfig() {
   document.getElementById('api-url').value    = localStorage.getItem('gtm_api')      || '';
   document.getElementById('hunter-key').value = localStorage.getItem('gtm_hunter')   || '';
+  document.getElementById('apify-key').value  = localStorage.getItem('gtm_apify')    || '';
   document.getElementById('industry').value   = localStorage.getItem('gtm_industry') || 'all';
   document.getElementById('workers').value    = localStorage.getItem('gtm_workers')  || '2';
 }
 
-// ── API ping ─────────────────────────────────────────────────────────────────────────
+// ── API ping ──────────────────────────────────────────────────────────────────────────────────
 async function pingApi() {
   const base = cfg.api();
   const el   = document.getElementById('api-status');
@@ -248,7 +345,7 @@ async function pingApi() {
   }
 }
 
-// ── File handling ─────────────────────────────────────────────────────────────────────
+// ── File handling ────────────────────────────────────────────────────────────────────────────────
 function handleDrop(e) {
   e.preventDefault();
   document.getElementById('drop-zone').classList.remove('over');
@@ -300,7 +397,246 @@ function parseRows(rows, filename) {
   updateStats();
 }
 
-// ── Table ─────────────────────────────────────────────────────────────────────────────
+// ── Get Leads (Apify Google Maps) ──────────────────────────────────────────────────────────
+function openLeadsModal() {
+  leadsAbort = false;
+  document.getElementById('leads-status-wrap').classList.add('hidden');
+  document.getElementById('leads-spinner').classList.add('hidden');
+  document.getElementById('btn-leads-search').disabled = false;
+  document.getElementById('leads-modal').style.display = 'flex';
+}
+function closeLeadsModal() {
+  leadsAbort = true;
+  document.getElementById('leads-modal').style.display = 'none';
+}
+
+function nicheKeywords(niche) {
+  const n = niche.toLowerCase();
+  const sets = [
+    { test: /dental|dentist/,           kws: ['dentist','dental clinic','dental office','family dentistry','cosmetic dentist','orthodontist','pediatric dentist','emergency dentist','teeth whitening','dental care center'] },
+    { test: /chiropract/,               kws: ['chiropractor','chiropractic clinic','chiropractic office','spine specialist','back pain clinic','sports chiropractor'] },
+    { test: /physiother|physical ther/, kws: ['physical therapy','physiotherapy clinic','rehabilitation center','sports rehab','orthopedic rehab'] },
+    { test: /medical|doctor|physician/, kws: ['medical clinic','doctor office','primary care physician','family doctor','urgent care','health clinic','general practitioner'] },
+    { test: /lawyer|attorney|law firm/, kws: ['law firm','attorney office','legal services','law office','legal counsel','personal injury lawyer','family lawyer'] },
+    { test: /restaurant|diner|bistro/,  kws: ['restaurant','diner','bistro','eatery','cafe restaurant','family restaurant','local restaurant'] },
+    { test: /cafe|coffee/,              kws: ['cafe','coffee shop','coffee house','espresso bar','bakery cafe'] },
+    { test: /gym|fitness|crossfit/,     kws: ['gym','fitness center','health club','crossfit box','personal training studio','workout center'] },
+    { test: /salon|hair|barbershop/,    kws: ['hair salon','beauty salon','barber shop','hair stylist','hair studio','men haircut'] },
+    { test: /nail/,                     kws: ['nail salon','nail spa','manicure pedicure','nail studio'] },
+    { test: /spa|massage/,              kws: ['spa','massage therapy','day spa','wellness center','massage center'] },
+    { test: /plumb/,                    kws: ['plumber','plumbing service','plumbing company','drain cleaning','pipe repair'] },
+    { test: /electric/,                 kws: ['electrician','electrical contractor','electrical service','electrical repair','licensed electrician'] },
+    { test: /hvac|air condition|heating/,kws: ['HVAC','air conditioning','heating and cooling','AC repair','furnace repair','AC installation'] },
+    { test: /roof/,                     kws: ['roofing company','roof repair','roof replacement','roofing contractor','roofer'] },
+    { test: /real estate|realtor/,      kws: ['real estate agent','realtor','real estate office','property agent','real estate broker'] },
+    { test: /mortgage|loan broker/,     kws: ['mortgage broker','mortgage lender','home loan','mortgage company','refinance'] },
+    { test: /account|bookkeep/,         kws: ['accountant','accounting firm','CPA','bookkeeper','tax accountant','tax preparer'] },
+    { test: /insurance/,                kws: ['insurance agent','insurance broker','insurance company','life insurance','auto insurance'] },
+    { test: /auto repair|mechanic/,     kws: ['auto repair shop','mechanic','car repair','auto service','automotive repair','oil change'] },
+    { test: /car dealer/,               kws: ['car dealership','auto dealer','used car dealer','new car dealer','vehicle sales'] },
+    { test: /hotel|motel|inn/,          kws: ['hotel','motel','inn','bed and breakfast','boutique hotel'] },
+    { test: /landscap|lawn/,            kws: ['landscaping company','lawn care','lawn service','garden service','landscape design'] },
+    { test: /cleaning|janitorial/,      kws: ['cleaning service','house cleaning','commercial cleaning','janitorial service','maid service'] },
+    { test: /vet|veterinar/,            kws: ['veterinarian','animal clinic','pet clinic','animal hospital','vet clinic'] },
+    { test: /optom|eye doctor|vision/,  kws: ['optometrist','eye doctor','vision center','eye clinic','optical store'] },
+    { test: /pharmacy|drugstore/,       kws: ['pharmacy','drugstore','compounding pharmacy','independent pharmacy'] },
+    { test: /tutoring|tutor/,           kws: ['tutoring center','tutor','learning center','academic tutoring','private tutor'] },
+    { test: /daycare|childcare|nursery/,kws: ['daycare','childcare center','nursery','preschool','early learning center'] },
+  ];
+
+  for (const {test, kws} of sets) {
+    if (test.test(n)) return kws;
+  }
+  // Generic fallback — use the niche itself plus common suffixes
+  const base = niche.trim();
+  return [
+    base,
+    base + ' near me',
+    base + ' service',
+    base + ' company',
+    base + ' office',
+    'best ' + base,
+    'local ' + base,
+    'professional ' + base,
+  ];
+}
+
+async function startLeadsSearch() {
+  const apifyKey = cfg.apify();
+  const niche    = document.getElementById('leads-niche').value.trim();
+  const country  = document.getElementById('leads-country').value.trim();
+  const location = document.getElementById('leads-location').value.trim();
+  const count    = Math.max(1, Math.min(500, parseInt(document.getElementById('leads-count').value) || 50));
+  const minRev   = parseInt(document.getElementById('leads-min-reviews').value) || 0;
+  const maxRev   = parseInt(document.getElementById('leads-max-reviews').value) || Infinity;
+
+  if (!apifyKey) { alert('Enter your Apify API key in the config bar at the top'); return; }
+  if (!niche)    { alert('Enter a niche'); return; }
+  if (!location) { alert('Enter a city or zip code'); return; }
+
+  leadsAbort = false;
+  const btn = document.getElementById('btn-leads-search');
+  btn.disabled = true;
+  document.getElementById('leads-spinner').classList.remove('hidden');
+
+  const statusWrap = document.getElementById('leads-status-wrap');
+  const statusText = document.getElementById('leads-status-text');
+  const kwText     = document.getElementById('leads-kw-text');
+  const fillBar    = document.getElementById('leads-progress-fill');
+  statusWrap.classList.remove('hidden');
+
+  const setStatus = (msg, kw) => {
+    statusText.textContent = msg;
+    if (kw !== undefined) kwText.textContent = kw;
+  };
+  const setProgress = (n, total) => {
+    fillBar.style.width = `${Math.round(Math.min(n/total, 1)*100)}%`;
+  };
+
+  const locationStr = location + (country ? `, ${country}` : '');
+  const keywords    = nicheKeywords(niche);
+  const found       = new Map(); // website → place object
+  const seenPlaces  = new Set(); // deduplicate by place id or title+address
+
+  for (let ki = 0; ki < keywords.length && found.size < count && !leadsAbort; ki++) {
+    const kw         = keywords[ki];
+    const searchTerm = `${kw} in ${locationStr}`;
+    const needed     = count - found.size;
+
+    setStatus(`Searching (${found.size}/${count} found)…`, `Keyword ${ki+1}/${keywords.length}: "${searchTerm}"`);
+    setProgress(found.size, count);
+
+    let runId, datasetId;
+    try {
+      const runResp = await fetch(
+        `https://api.apify.com/v2/acts/compass~google-maps-scraper/runs?token=${encodeURIComponent(apifyKey)}`,
+        {
+          method:  'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            searchStringsArray:          [searchTerm],
+            maxCrawledPlacesPerSearch:   Math.min(needed + 30, 200),
+            language:                    'en',
+            countryCode:                 country || undefined,
+            skipClosedPlaces:            true,
+          }),
+        }
+      );
+      if (!runResp.ok) {
+        const err = await runResp.json().catch(() => ({}));
+        setStatus(`Apify error: ${err.error?.message || `HTTP ${runResp.status}`}`, '');
+        break;
+      }
+      const runData = await runResp.json();
+      runId     = runData.data?.id;
+      datasetId = runData.data?.defaultDatasetId;
+      if (!runId) { setStatus('Apify did not return a run ID', ''); break; }
+    } catch(e) {
+      setStatus(`Network error: ${e.message}`, '');
+      break;
+    }
+
+    // Poll until run finishes
+    let status = 'READY';
+    while ((status === 'READY' || status === 'RUNNING') && !leadsAbort) {
+      await new Promise(r => setTimeout(r, 3500));
+      try {
+        const sr   = await fetch(`https://api.apify.com/v2/actor-runs/${runId}?token=${encodeURIComponent(apifyKey)}`);
+        const sd   = await sr.json();
+        status     = sd.data?.status || 'FAILED';
+        datasetId  = sd.data?.defaultDatasetId || datasetId;
+        setStatus(`Keyword "${kw}" — ${status.toLowerCase()}… (${found.size}/${count} found)`, kwText.textContent);
+      } catch(_) {
+        // transient network hiccup — keep polling
+      }
+    }
+
+    if (leadsAbort) break;
+    if (status !== 'SUCCEEDED') continue;
+
+    // Fetch dataset items
+    try {
+      const itemsResp = await fetch(
+        `https://api.apify.com/v2/datasets/${datasetId}/items?token=${encodeURIComponent(apifyKey)}&limit=300&clean=true`
+      );
+      const items = await itemsResp.json();
+
+      for (const item of (Array.isArray(items) ? items : [])) {
+        if (found.size >= count) break;
+        const website = item.website || item.url;
+        if (!website) continue;
+
+        // Review filter
+        const reviews = item.reviewsCount ?? item.totalReviews ?? 0;
+        if (reviews < minRev) continue;
+        if (maxRev !== Infinity && reviews > maxRev) continue;
+
+        // Deduplicate
+        const dedupeKey = item.placeId || `${item.title}|${item.address}`;
+        if (seenPlaces.has(dedupeKey)) continue;
+        seenPlaces.add(dedupeKey);
+
+        const normalised = website.startsWith('http') ? website : 'https://' + website;
+        if (found.has(normalised)) continue;
+
+        found.set(normalised, {
+          title:    item.title || item.name,
+          address:  item.address,
+          phone:    item.phone || item.phoneUnformatted,
+          reviews:  reviews,
+          rating:   item.totalScore,
+          category: item.categoryName || item.categories?.[0],
+        });
+
+        setProgress(found.size, count);
+        setStatus(`Found ${found.size}/${count} leads…`, kwText.textContent);
+      }
+    } catch(e) {
+      // dataset fetch failed — continue with next keyword
+    }
+  }
+
+  btn.disabled = false;
+  document.getElementById('leads-spinner').classList.add('hidden');
+
+  if (!found.size) {
+    setStatus('No leads found. Try a different niche, location, or review range.', '');
+    setProgress(0, 1);
+    return;
+  }
+
+  setStatus(`✓ ${found.size} lead${found.size !== 1 ? 's' : ''} found! Adding to table…`, '');
+  setProgress(found.size, count);
+
+  // Merge into urls / results
+  const existingSet = new Set(urls.map(u => u.url));
+  let added = 0;
+  for (const [website, info] of found) {
+    if (existingSet.has(website)) continue;
+    urls.push({
+      url:      website,
+      name:     info.title || website.replace(/^https?:\/\/(www\.)?/, '').split('/')[0],
+      reviews:  info.reviews,
+      rating:   info.rating,
+      address:  info.address,
+      phone:    info.phone,
+      category: info.category,
+    });
+    added++;
+  }
+
+  document.getElementById('drop-zone').classList.add('hidden');
+  document.getElementById('main-section').classList.remove('hidden');
+  document.getElementById('url-heading').textContent    = `${urls.length} URL${urls.length !== 1 ? 's' : ''} found`;
+  document.getElementById('url-subheading').textContent = `${added} new leads added from Google Maps via Apify`;
+
+  renderTable();
+  updateStats();
+
+  setTimeout(closeLeadsModal, 800);
+}
+
+// ── Table ──────────────────────────────────────────────────────────────────────────────────
 function renderTable() {
   document.getElementById('table-body').innerHTML = urls.map((_, i) => rowHtml(i)).join('');
 }
@@ -317,10 +653,22 @@ function rowHtml(idx) {
     error:   `<span class="text-red-400">Error<br><span class="text-xs text-red-300">${esc(r.error||'').slice(0,50)}</span></span>`,
   }[st] || `<span class="text-slate-400">${st}</span>`;
 
+  // Extra info from Apify (only available for leads rows)
+  const metaLine = (u.address || u.phone || u.reviews != null)
+    ? `<div class="text-slate-500 text-xs mt-0.5">${[
+        u.reviews != null ? `★ ${u.rating?.toFixed(1) ?? '?'} (${u.reviews})` : '',
+        u.phone   ? u.phone : '',
+        u.address ? u.address.split(',').slice(0,2).join(',') : '',
+      ].filter(Boolean).join(' · ')}</div>`
+    : '';
+
   return `<tr id="row-${idx}">
     <td><input type="checkbox" class="url-cb" data-idx="${idx}" checked/></td>
     <td class="text-slate-500">${idx+1}</td>
-    <td class="max-w-xs"><a href="${esc(u.url)}" target="_blank" class="text-indigo-400 hover:underline text-xs break-all">${esc(u.name||u.url)}</a></td>
+    <td class="max-w-xs">
+      <a href="${esc(u.url)}" target="_blank" class="text-indigo-400 hover:underline text-xs break-all">${esc(u.name||u.url)}</a>
+      ${metaLine}
+    </td>
     <td>${statusCell}</td>
     <td>${dmCell(idx)}</td>
     <td>${emailCell(idx)}</td>
@@ -426,7 +774,7 @@ function updateRow(idx) {
   if (row) row.outerHTML = rowHtml(idx);
 }
 
-// ── Stats ─────────────────────────────────────────────────────────────────────────────
+// ── Stats ──────────────────────────────────────────────────────────────────────────────────
 function updateStats() {
   const vals = Object.values(results);
   document.getElementById('st-total').textContent = urls.length;
@@ -436,7 +784,7 @@ function updateStats() {
   document.getElementById('st-cro').textContent   = vals.filter(r => r.cro_audit && !r.cro_audit.error).length;
 }
 
-// ── Run one URL ──────────────────────────────────────────────────────────────────────
+// ── Run one URL ───────────────────────────────────────────────────────────────────────────────
 async function runOne(idx) {
   const u    = urls[idx];
   const base = cfg.api();
@@ -466,7 +814,7 @@ async function runOne(idx) {
   }
 }
 
-// ── Run all ──────────────────────────────────────────────────────────────────────────
+// ── Run all ───────────────────────────────────────────────────────────────────────────────
 async function runAll() {
   if (running) return;
   const base = cfg.api();
@@ -523,7 +871,7 @@ function clearAll() {
   document.getElementById('progress-wrap').classList.add('hidden');
 }
 
-// ── CRO ─────────────────────────────────────────────────────────────────────────────
+// ── CRO ───────────────────────────────────────────────────────────────────────────────────
 async function startCro(idx) {
   if (croRunning.has(idx)) return;
   const u    = urls[idx];
@@ -571,7 +919,7 @@ async function runAllCro() {
   await Promise.all(Array.from({length: Math.min(cfg.workers(), pool.length)}, run));
 }
 
-// ── Hunter.io ──────────────────────────────────────────────────────────────────────
+// ── Hunter.io ──────────────────────────────────────────────────────────────────────────────
 async function lookupHunter(idx) {
   if (hunterRunning.has(idx)) return;
   const u    = urls[idx];
@@ -643,12 +991,12 @@ async function auditDmSite(idx) {
   updateStats();
 }
 
-// ── Select helpers ───────────────────────────────────────────────────────────────────────
+// ── Select helpers ────────────────────────────────────────────────────────────────────────────────
 function selectAll()  { document.querySelectorAll('.url-cb').forEach(cb => cb.checked = true); }
 function selectNone() { document.querySelectorAll('.url-cb').forEach(cb => cb.checked = false); }
 function toggleAll(master) { document.querySelectorAll('.url-cb').forEach(cb => cb.checked = master.checked); }
 
-// ── Downloads ─────────────────────────────────────────────────────────────────────────
+// ── Downloads ───────────────────────────────────────────────────────────────────────────────
 function dlContact(idx) {
   const r = results[urls[idx].url] || {};
   const h = r.hunter_data;
@@ -687,7 +1035,7 @@ function _dl(content, filename, type) {
 function safe(u) { return (u.name||u.url).replace(/[^a-zA-Z0-9._-]/g,'_').slice(0,60); }
 function esc(s)  { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
-// ── CRO Modal ────────────────────────────────────────────────────────────────────────
+// ── CRO Modal ──────────────────────────────────────────────────────────────────────────────────
 function showCroModal(idx) {
   const u   = urls[idx];
   const r   = results[u.url] || {};
@@ -739,7 +1087,7 @@ function showCroModal(idx) {
 }
 function closeCroModal() { document.getElementById('cro-modal').style.display = 'none'; }
 
-// ── Screenshot modal ───────────────────────────────────────────────────────────────────
+// ── Screenshot modal ───────────────────────────────────────────────────────────────────────────────
 let _ssIdx = null;
 function showScreenshot(idx) {
   const r = results[urls[idx].url] || {};
@@ -763,7 +1111,7 @@ function dlScreenshot() {
   a.click();
 }
 
-// ── Init ─────────────────────────────────────────────────────────────────────────────
+// ── Init ───────────────────────────────────────────────────────────────────────────────────
 loadConfig();
 pingApi();
 </script>
