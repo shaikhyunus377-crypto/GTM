@@ -1,471 +1,572 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>GTM CRO Audit Tool</title>
-<script src="https://cdn.tailwindcss.com"></script>
-<script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
-<style>
-  body{font-family:system-ui,sans-serif;background:#0f172a;color:#e2e8f0}
-  .card{background:#1e293b;border:1px solid #334155;border-radius:.75rem}
-  .btn{padding:.4rem 1rem;border-radius:.5rem;font-size:.85rem;cursor:pointer;border:none;font-weight:600;transition:.15s}
-  .btn-primary{background:#6366f1;color:#fff}.btn-primary:hover{background:#4f46e5}
-  .btn-sm{padding:.25rem .65rem;font-size:.75rem}
-  .btn-green{background:#059669;color:#fff}.btn-green:hover{background:#047857}
-  .btn-red{background:#dc2626;color:#fff}.btn-red:hover{background:#b91c1c}
-  .btn-yellow{background:#d97706;color:#fff}.btn-yellow:hover{background:#b45309}
-  .btn-slate{background:#475569;color:#fff}.btn-slate:hover{background:#334155}
-  .badge{display:inline-block;padding:.1rem .4rem;border-radius:.25rem;font-size:.7rem;font-weight:700}
-  .badge-red{background:#7f1d1d;color:#fca5a5}
-  .badge-yellow{background:#78350f;color:#fde68a}
-  .badge-green{background:#14532d;color:#86efac}
-  .badge-slate{background:#1e293b;color:#94a3b8;border:1px solid #475569}
-  .spinner{display:inline-block;width:10px;height:10px;border:2px solid #ffffff44;border-top-color:#fff;border-radius:50%;animation:spin .6s linear infinite;margin-right:4px}
-  @keyframes spin{to{transform:rotate(360deg)}}
-  .cro-start-btn{padding:.2rem .55rem;font-size:.72rem;border-radius:.35rem;cursor:pointer;border:1px solid #6366f1;background:#1e1b4b;color:#a5b4fc;font-weight:600;transition:.15s}
-  .cro-start-btn:hover:not(:disabled){background:#6366f1;color:#fff}
-  .cro-start-btn:disabled{opacity:.5;cursor:not-allowed}
-  table{border-collapse:collapse;width:100%}
-  th,td{text-align:left;padding:.45rem .6rem;border-bottom:1px solid #1e293b;font-size:.8rem;vertical-align:top}
-  th{background:#0f172a;color:#94a3b8;font-weight:600;position:sticky;top:0;z-index:10}
-  tr:hover td{background:#1e293b88}
-  input[type=text],input[type=url],select{background:#0f172a;border:1px solid #334155;border-radius:.4rem;color:#e2e8f0;padding:.3rem .6rem;font-size:.85rem}
-  input[type=text]:focus,input[type=url]:focus,select:focus{outline:none;border-color:#6366f1}
-  .modal-bg{position:fixed;inset:0;background:#00000088;z-index:50;display:flex;align-items:center;justify-content:center}
-  .modal-box{background:#1e293b;border:1px solid #334155;border-radius:.75rem;padding:1.5rem;max-width:56rem;width:95%;max-height:90vh;overflow-y:auto}
-  .issue-card{border:1px solid #334155;border-radius:.5rem;padding:.75rem;margin-bottom:.6rem;background:#0f172a}
-  .issue-card.high{border-left:3px solid #ef4444}
-  .issue-card.medium{border-left:3px solid #f59e0b}
-  .issue-card.low{border-left:3px solid #6366f1}
-  .issue-card.gap{border-left:3px solid #475569}
-</style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Web Scraper Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
+  <style>
+    body{background:#0f172a;color:#e2e8f0;font-family:system-ui,sans-serif;}
+    .card{background:#1e293b;border:1px solid #334155;border-radius:12px;}
+    .drop-zone{border:2px dashed #475569;transition:all .2s;}
+    .drop-zone.drag-over{border-color:#6366f1;background:#1e1b4b;}
+    .status-pending{color:#94a3b8;} .status-running{color:#fbbf24;}
+    .status-done{color:#34d399;}    .status-error{color:#f87171;}
+    .status-no_dm{color:#fb923c;}
+    .progress-bar{transition:width .4s ease;}
+    ::-webkit-scrollbar{width:6px} ::-webkit-scrollbar-track{background:#1e293b}
+    ::-webkit-scrollbar-thumb{background:#475569;border-radius:3px}
+    .thumb-img{width:80px;height:52px;object-fit:cover;border-radius:4px;
+      cursor:pointer;border:1px solid #475569;}
+    .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.88);z-index:1000;
+      display:flex;align-items:center;justify-content:center;}
+    .modal-img{max-width:92vw;max-height:92vh;border-radius:8px;}
+    .spinner{border:2px solid #334155;border-top-color:#6366f1;border-radius:50%;
+      width:13px;height:13px;animation:spin .7s linear infinite;
+      display:inline-block;vertical-align:middle;margin-right:4px;}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    .dl-btn{font-size:11px;padding:3px 8px;border-radius:5px;cursor:pointer;
+      border:1px solid #475569;background:#0f172a;color:#94a3b8;
+      white-space:nowrap;display:block;width:100%;text-align:left;margin-bottom:3px;}
+    .dl-btn:hover:not(:disabled){background:#1e293b;color:#e2e8f0;}
+    .dl-btn:disabled{opacity:.28;cursor:default;}
+    .tag-dm{display:inline-block;font-size:10px;padding:2px 6px;border-radius:4px;
+      background:#14532d;color:#4ade80;margin-bottom:3px;}
+    .tag-nodm{display:inline-block;font-size:10px;padding:2px 6px;border-radius:4px;
+      background:#431407;color:#fb923c;}
+    /* CRO badges */
+    .cro-badge-high  {background:#450a0a;color:#f87171;font-size:10px;padding:1px 6px;border-radius:4px;}
+    .cro-badge-medium{background:#422006;color:#fbbf24;font-size:10px;padding:1px 6px;border-radius:4px;}
+    .cro-badge-gap   {background:#1e3a5f;color:#60a5fa;font-size:10px;padding:1px 6px;border-radius:4px;}
+    .cro-start-btn{font-size:10px;padding:2px 7px;border-radius:4px;cursor:pointer;
+      border:1px solid #6366f1;background:#1e1b4b;color:#818cf8;
+      white-space:nowrap;transition:background .15s;}
+    .cro-start-btn:hover:not(:disabled){background:#312e81;color:#a5b4fc;}
+    .cro-start-btn:disabled{opacity:.35;cursor:default;}
+    .cro-panel{background:#0f172a;border:1px solid #334155;border-radius:8px;
+      padding:12px;margin-top:8px;}
+    .sev-high  {color:#f87171;font-weight:600;}
+    .sev-medium{color:#fbbf24;font-weight:600;}
+    .sev-low   {color:#94a3b8;}
+  </style>
 </head>
 <body class="min-h-screen">
 
 <!-- Header -->
-<div class="flex items-center justify-between px-6 py-3 border-b border-slate-700" style="background:#1e293b">
-  <div>
-    <span class="text-lg font-bold text-indigo-400">GTM</span>
-    <span class="text-slate-400 text-sm ml-2">CRO Audit Tool</span>
+<div class="px-6 py-4 border-b border-slate-700 flex items-center justify-between">
+  <div class="flex items-center gap-3">
+    <div class="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center
+                text-white font-bold text-sm">S</div>
+    <h1 class="text-lg font-semibold text-white">Web Scraper Dashboard</h1>
   </div>
-  <div id="api-status" class="text-xs text-slate-500">Checking API…</div>
+  <div id="apiStatus" class="text-xs px-3 py-1 rounded-full bg-slate-700 text-slate-400">Checking...</div>
 </div>
 
-<!-- Config -->
-<div class="p-4 border-b border-slate-700" style="background:#1e293b88">
-  <div class="flex flex-wrap gap-3 items-end">
-    <!-- API URL -->
-    <div>
-      <div class="text-xs text-slate-400 mb-1">API URL</div>
-      <input id="api-url" type="url" placeholder="https://your-railway-app.up.railway.app"
-        class="w-80" oninput="saveConfig()"/>
+<div class="max-w-screen-2xl mx-auto px-4 py-6 space-y-5">
+
+  <!-- Config row -->
+  <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+    <div class="card p-4">
+      <label class="block text-xs text-slate-400 mb-1">Backend URL (Railway)</label>
+      <input id="apiUrl" type="text" value="https://gtm-production-8ae5.up.railway.app"
+        class="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm
+               text-white focus:outline-none focus:border-indigo-500" />
     </div>
-    <!-- Industry -->
-    <div>
-      <div class="text-xs text-slate-400 mb-1">Industry</div>
-      <select id="industry" onchange="saveConfig()">
-        <option value="all">All Industries</option>
+    <div class="card p-4">
+      <label class="block text-xs text-slate-400 mb-1">Hunter.io API Key</label>
+      <input id="hunterKey" type="password" placeholder="Hunter API key (optional)"
+        class="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm
+               text-white focus:outline-none focus:border-indigo-500" />
+      <label class="flex items-center gap-2 mt-2 cursor-pointer">
+        <input type="checkbox" id="skipHunter" class="rounded" />
+        <span class="text-xs text-slate-400">Skip Hunter (scrape all)</span>
+      </label>
+    </div>
+    <div class="card p-4">
+      <label class="block text-xs text-slate-400 mb-1">Industry (CRO gap detection)</label>
+      <select id="industry" class="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2
+                                   text-sm text-white focus:outline-none focus:border-indigo-500">
+        <option value="all">All / General</option>
         <option value="dental">Dental</option>
         <option value="medical">Medical</option>
         <option value="local_business">Local Business</option>
-        <option value="ecommerce">E-Commerce</option>
+        <option value="booking">Booking / Service</option>
+        <option value="ecommerce">E-commerce</option>
         <option value="saas">SaaS</option>
-        <option value="booking">Booking</option>
         <option value="restaurant">Restaurant</option>
         <option value="portfolio">Portfolio</option>
       </select>
     </div>
-    <!-- Workers -->
-    <div>
-      <div class="text-xs text-slate-400 mb-1">Workers</div>
-      <select id="workers" onchange="saveConfig()">
-        <option value="1">1 (safe)</option>
-        <option value="2" selected>2</option>
-        <option value="3">3</option>
-        <option value="5">5</option>
-      </select>
+    <div class="card p-4">
+      <label class="block text-xs text-slate-400 mb-1">Mode</label>
+      <div class="flex gap-2 mt-1">
+        <button id="btnSeq" onclick="setMode('sequential')"
+          class="flex-1 py-2 rounded-lg text-sm font-medium bg-indigo-600 text-white">Sequential</button>
+        <button id="btnPar" onclick="setMode('parallel')"
+          class="flex-1 py-2 rounded-lg text-sm font-medium bg-slate-700 text-slate-300">Parallel</button>
+      </div>
     </div>
-    <!-- Hunter key -->
-    <div>
-      <div class="text-xs text-slate-400 mb-1">Hunter.io Key</div>
-      <input id="hunter-key" type="text" placeholder="(optional)" class="w-44" oninput="saveConfig()"/>
+    <div class="card p-4">
+      <label class="block text-xs text-slate-400 mb-1">Parallel workers</label>
+      <input id="workerCount" type="number" value="3" min="1" max="10"
+        class="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm
+               text-white focus:outline-none focus:border-indigo-500" />
     </div>
-    <!-- Ping -->
-    <button class="btn btn-slate btn-sm" onclick="pingApi()">⟳ Ping API</button>
+  </div>
+
+  <!-- Upload -->
+  <div id="dropZone" class="drop-zone card p-10 text-center cursor-pointer"
+    onclick="document.getElementById('fileInput').click()"
+    ondragover="event.preventDefault();this.classList.add('drag-over')"
+    ondragleave="this.classList.remove('drag-over')"
+    ondrop="handleDrop(event)">
+    <div class="text-4xl mb-3">&#128194;</div>
+    <p class="text-white font-medium">Drop Excel / CSV file here or click to browse</p>
+    <p class="text-slate-400 text-sm mt-1">Supports .xlsx .xls .csv &mdash; URLs auto-detected</p>
+    <input id="fileInput" type="file" accept=".xlsx,.xls,.csv" class="hidden"
+           onchange="handleFile(this.files[0])" />
+  </div>
+
+  <!-- Results -->
+  <div id="urlSection" class="hidden">
+
+    <!-- Toolbar -->
+    <div class="flex flex-wrap items-center justify-between gap-3 mb-3">
+      <div>
+        <h2 class="text-white font-semibold" id="urlHeading">URLs</h2>
+        <p class="text-slate-400 text-xs mt-0.5" id="urlSubheading"></p>
+      </div>
+      <div class="flex gap-2 flex-wrap">
+        <button onclick="selectAll()"
+          class="text-xs px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300">Select all</button>
+        <button onclick="selectNone()"
+          class="text-xs px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300">Deselect all</button>
+        <button onclick="runAllCro()"
+          class="text-xs px-3 py-1.5 rounded-lg bg-indigo-900 hover:bg-indigo-800 text-indigo-300"
+          title="Run CRO audit on all done rows">&#9654; Run all CRO</button>
+        <button onclick="downloadAll()"
+          class="text-xs px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300">&#8595; Download all</button>
+        <button id="runBtn" onclick="runScraping()"
+          class="px-5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium">&#9654; Run Scraper</button>
+      </div>
+    </div>
+
+    <!-- Stats -->
+    <div id="statsBar" class="hidden flex gap-5 mb-4 text-xs">
+      <span class="text-slate-400">Total: <span id="statTotal" class="text-white font-semibold">0</span></span>
+      <span class="text-green-400">Done: <span id="statDone" class="font-semibold">0</span></span>
+      <span class="text-orange-400">No DM: <span id="statNoDm" class="font-semibold">0</span></span>
+      <span class="text-red-400">Error: <span id="statError" class="font-semibold">0</span></span>
+      <span class="text-indigo-400">CRO done: <span id="statCro" class="font-semibold">0</span></span>
+    </div>
+
+    <!-- Progress -->
+    <div id="overallProgress" class="hidden card p-4 mb-4">
+      <div class="flex justify-between text-sm mb-2">
+        <span class="text-slate-300" id="progressLabel">Running...</span>
+        <span class="text-slate-400" id="progressCount">0 / 0</span>
+      </div>
+      <div class="h-2 bg-slate-700 rounded-full overflow-hidden">
+        <div id="progressBar" class="progress-bar h-full bg-indigo-500 rounded-full" style="width:0%"></div>
+      </div>
+    </div>
+
+    <!-- Table -->
+    <div class="card overflow-hidden">
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="border-b border-slate-700 text-left">
+              <th class="px-3 py-3 w-8"><input type="checkbox" id="checkAll" onchange="toggleAll(this)" /></th>
+              <th class="px-3 py-3 text-slate-400 font-medium w-8">#</th>
+              <th class="px-3 py-3 text-slate-400 font-medium">URL</th>
+              <th class="px-3 py-3 text-slate-400 font-medium">Status</th>
+              <th class="px-3 py-3 text-slate-400 font-medium">Decision Maker</th>
+              <th class="px-3 py-3 text-slate-400 font-medium">Email</th>
+              <th class="px-3 py-3 text-slate-400 font-medium">Phone</th>
+              <th class="px-3 py-3 text-slate-400 font-medium">Elements</th>
+              <th class="px-3 py-3 text-slate-400 font-medium" style="min-width:170px">CRO Audit</th>
+              <th class="px-3 py-3 text-slate-400 font-medium">Screenshot</th>
+              <th class="px-3 py-3 text-slate-400 font-medium" style="min-width:130px">Downloads</th>
+            </tr>
+          </thead>
+          <tbody id="urlTableBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="flex justify-end mt-3">
+      <button onclick="exportCsv()"
+        class="text-xs px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300">&#8595; Export CSV</button>
+    </div>
   </div>
 </div>
 
-<!-- Upload + controls -->
-<div class="p-4 border-b border-slate-700 flex flex-wrap gap-3 items-center">
-  <label class="btn btn-slate btn-sm cursor-pointer">
-    📂 Load Excel / CSV
-    <input type="file" accept=".xlsx,.xls,.csv" style="display:none" onchange="loadFile(this)"/>
-  </label>
-  <button class="btn btn-primary btn-sm" onclick="runAll()" id="btn-run">▶ Run All</button>
-  <button class="btn btn-sm" style="background:#7c3aed;color:#fff" onclick="runAllCro()" id="btn-cro-all">⚙ Run All CRO</button>
-  <button class="btn btn-yellow btn-sm" onclick="runAllHunter()" id="btn-hunter-all">👤 Run All DM</button>
-  <button class="btn btn-slate btn-sm" onclick="stopAll()" id="btn-stop" disabled>■ Stop</button>
-  <button class="btn btn-green btn-sm" onclick="downloadAll()">↓ Download All</button>
-  <button class="btn btn-slate btn-sm" onclick="clearAll()">✕ Clear</button>
-
-  <!-- Stats -->
-  <div id="stats" class="ml-auto text-xs text-slate-400"></div>
+<!-- Screenshot modal -->
+<div id="modal" class="modal-overlay hidden" onclick="closeModal()">
+  <img id="modalImg" class="modal-img" src="" alt="Screenshot" onclick="event.stopPropagation()" />
 </div>
 
-<!-- Table -->
-<div style="overflow-x:auto;max-height:calc(100vh - 240px);overflow-y:auto">
-<table id="main-table">
-  <thead>
-    <tr>
-      <th>#</th>
-      <th>URL</th>
-      <th>Status</th>
-      <th>HTML</th>
-      <th>DOM</th>
-      <th>Screenshot</th>
-      <th>CRO Audit</th>
-      <th>Contacts</th>
-      <th>Actions</th>
-    </tr>
-  </thead>
-  <tbody id="table-body">
-    <tr><td colspan="9" class="text-center text-slate-500 py-8">Load an Excel/CSV file to begin</td></tr>
-  </tbody>
-</table>
-</div>
-
-<!-- CRO Detail Modal -->
-<div id="cro-modal" class="modal-bg" style="display:none" onclick="if(event.target===this)closeCroModal()">
-  <div class="modal-box">
-    <div class="flex justify-between items-start mb-4">
-      <div>
-        <div class="font-bold text-lg" id="cro-modal-title">CRO Report</div>
-        <div class="text-xs text-slate-400 mt-1" id="cro-modal-meta"></div>
-      </div>
-      <button class="text-slate-400 hover:text-white text-xl leading-none" onclick="closeCroModal()">✕</button>
+<!-- CRO detail modal -->
+<div id="croModal" class="modal-overlay hidden" onclick="closeCroModal()">
+  <div class="card" style="max-width:800px;width:94vw;max-height:90vh;overflow-y:auto;padding:24px"
+       onclick="event.stopPropagation()">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-white font-semibold" id="croModalTitle">CRO Audit</h2>
+      <button onclick="closeCroModal()" class="text-slate-400 hover:text-white text-xl font-bold leading-none">&times;</button>
     </div>
-    <div id="cro-modal-summary" class="flex gap-3 mb-4 flex-wrap"></div>
-    <div id="cro-modal-issues"></div>
+    <div id="croModalBody"></div>
   </div>
 </div>
 
 <script>
-// ── State ───────────────────────────────────────────────────────────────────
-let urls       = [];   // [{url, name}]
-let results    = {};   // {url: {status, html, dom_states, screenshot_b64, cro_audit, hunter_data, error}}
-let hunterRunning = new Set();  // idx values currently fetching Hunter
-let running    = false;
-let stopFlag   = false;
-let croRunning = new Set();
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+let mode    = 'sequential';
+let urls    = [];      // [{url, idx}]
+let results = {};      // url -> result object
+let running = false;
+let croRunning = new Set(); // indices currently running CRO
 
-// ── Config ───────────────────────────────────────────────────────────────────
-function apiBase() {
-  return (document.getElementById('api-url').value || '').replace(/\/$/, '');
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+const $ = id => document.getElementById(id);
+const apiBase   = () => $('apiUrl').value.trim().replace(/\/$/, '');
+const hunterKey = () => $('hunterKey').value.trim();
+const skipHunt  = () => $('skipHunter').checked;
+const industry  = () => $('industry').value;
+const esc = s => String(s)
+  .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
+// ---------------------------------------------------------------------------
+// API health
+// ---------------------------------------------------------------------------
+function checkApi() {
+  fetch(apiBase() + '/').then(r => r.json()).then(d => {
+    const ok  = d.status === 'ok';
+    const cro = d.cro_available ? ' + CRO' : ' (no CRO)';
+    $('apiStatus').textContent = ok ? 'API online' + cro : 'API error';
+    $('apiStatus').className   = 'text-xs px-3 py-1 rounded-full ' +
+      (ok ? 'bg-green-900 text-green-400' : 'bg-red-900 text-red-400');
+  }).catch(() => {
+    $('apiStatus').textContent = 'API offline';
+    $('apiStatus').className   = 'text-xs px-3 py-1 rounded-full bg-red-900 text-red-400';
+  });
 }
-function industry() { return document.getElementById('industry').value; }
-function workerCount() { return parseInt(document.getElementById('workers').value) || 2; }
-function hunterKey() { return document.getElementById('hunter-key').value.trim(); }
+$('apiUrl').addEventListener('change', checkApi);
+checkApi();
 
-function saveConfig() {
-  localStorage.setItem('gtm_api_url',  document.getElementById('api-url').value);
-  localStorage.setItem('gtm_industry', document.getElementById('industry').value);
-  localStorage.setItem('gtm_workers',  document.getElementById('workers').value);
-  localStorage.setItem('gtm_hunter',   document.getElementById('hunter-key').value);
-}
-
-function loadConfig() {
-  document.getElementById('api-url').value   = localStorage.getItem('gtm_api_url')  || '';
-  document.getElementById('industry').value  = localStorage.getItem('gtm_industry') || 'all';
-  document.getElementById('workers').value   = localStorage.getItem('gtm_workers')  || '2';
-  document.getElementById('hunter-key').value = localStorage.getItem('gtm_hunter')  || '';
-}
-
-// ── API ping ─────────────────────────────────────────────────────────────────
-async function pingApi() {
-  const base = apiBase();
-  const el   = document.getElementById('api-status');
-  if (!base) { el.textContent = 'Set API URL first'; el.className = 'text-xs text-red-400'; return; }
-  el.textContent = 'Pinging…'; el.className = 'text-xs text-slate-400';
-  try {
-    const r = await fetch(base + '/', {signal: AbortSignal.timeout(8000)});
-    const d = await r.json();
-    if (d.status === 'ok') {
-      const cro = d.cro_available ? ' + CRO' : ' (no CRO)';
-      el.textContent = `API online${cro} — v${d.server || '?'}`;
-      el.className   = 'text-xs text-green-400';
-    } else {
-      el.textContent = 'API error'; el.className = 'text-xs text-red-400';
-    }
-  } catch(e) {
-    el.textContent = 'API unreachable'; el.className = 'text-xs text-red-400';
-  }
+function setMode(m) {
+  mode = m;
+  $('btnSeq').className = 'flex-1 py-2 rounded-lg text-sm font-medium ' +
+    (m === 'sequential' ? 'bg-indigo-600 text-white' : 'bg-slate-700 text-slate-300');
+  $('btnPar').className = 'flex-1 py-2 rounded-lg text-sm font-medium ' +
+    (m === 'parallel'   ? 'bg-indigo-600 text-white' : 'bg-slate-700 text-slate-300');
 }
 
-// ── File loading ─────────────────────────────────────────────────────────────
-function loadFile(input) {
-  const file = input.files[0];
+// ---------------------------------------------------------------------------
+// File handling
+// ---------------------------------------------------------------------------
+function handleDrop(e) {
+  e.preventDefault();
+  $('dropZone').classList.remove('drag-over');
+  handleFile(e.dataTransfer.files[0]);
+}
+function handleFile(file) {
   if (!file) return;
   const reader = new FileReader();
-  reader.onload = e => {
-    const wb   = XLSX.read(e.target.result, {type: 'array'});
-    const ws   = wb.Sheets[wb.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json(ws, {header: 1, defval: ''});
-    const newUrls = [];
-    const seen    = new Set();
-    for (const row of rows) {
-      for (const cell of row) {
-        const v = String(cell || '').trim();
-        if (!v || v.length > 300) continue;
-        let url = '';
-        if (v.startsWith('http://') || v.startsWith('https://')) {
-          url = v;
-        } else if (/^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z]{2,})+$/.test(v)) {
-          // bare domain like "example.com" — prepend https://
-          url = 'https://' + v;
-        }
-        if (url && !seen.has(url)) {
-          seen.add(url);
-          newUrls.push({url, name: url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0]});
-        }
-      }
-    }
-    if (!newUrls.length) { alert('No URLs found in file'); return; }
-    urls = newUrls;
-    results = {};
-    renderTable();
-    updateStats();
+  reader.onload = ev => {
+    const wb = XLSX.read(ev.target.result, { type: 'binary' });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    processRows(XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' }), file.name);
   };
-  reader.readAsArrayBuffer(file);
-  input.value = '';
+  reader.readAsBinaryString(file);
 }
+const isUrl = v => typeof v === 'string' && /^https?:\/\//i.test(v);
 
-// ── Table render ─────────────────────────────────────────────────────────────
-function renderTable() {
-  const tbody = document.getElementById('table-body');
-  if (!urls.length) {
-    tbody.innerHTML = '<tr><td colspan="9" class="text-center text-slate-500 py-8">Load an Excel/CSV file to begin</td></tr>';
-    return;
-  }
-  tbody.innerHTML = urls.map((u, i) => rowHtml(i)).join('');
-}
-
-function rowHtml(idx) {
-  const u = urls[idx];
-  const r = results[u.url] || {};
-  const st = r.status || 'pending';
-
-  const statusBadge = {
-    'pending':  '<span class="badge badge-slate">pending</span>',
-    'running':  '<span class="badge" style="background:#1e3a5f;color:#93c5fd"><span class="spinner"></span>running</span>',
-    'done':     '<span class="badge badge-green">done</span>',
-    'error':    '<span class="badge badge-red">error</span>',
-  }[st] || `<span class="badge badge-slate">${st}</span>`;
-
-  const dlBtn = (label, fn, cond) =>
-    cond ? `<button class="btn btn-slate btn-sm" onclick="${fn}(${idx})">${label}</button>` : '';
-
-  return `<tr id="row-${idx}">
-    <td class="text-slate-500">${idx+1}</td>
-    <td class="max-w-xs truncate" title="${u.url}"><a href="${u.url}" target="_blank" class="text-indigo-400 hover:underline text-xs">${u.name || u.url}</a></td>
-    <td>${statusBadge}${r.error ? `<div class="text-red-400 text-xs mt-1">${r.error.slice(0,60)}</div>` : ''}</td>
-    <td>${dlBtn('↓ HTML', 'dlHtml', r.html)}</td>
-    <td>${dlBtn('↓ DOM', 'dlJson', r.dom_states)}</td>
-    <td>${dlBtn('↓ PNG', 'dlScreenshot', r.screenshot_b64)}</td>
-    <td>${croCellHtml(idx)}</td>
-    <td>${contactCellHtml(idx)}</td>
-    <td class="flex gap-1 flex-wrap">
-      ${st === 'pending' || st === 'error' ? `<button class="btn btn-primary btn-sm" onclick="runOne(${idx})">▶ Run</button>` : ''}
-      ${st === 'done' ? `<button class="btn btn-slate btn-sm" onclick="runOne(${idx})">↺ Re-run</button>` : ''}
-      ${st === 'done' && (!r.hunter_data || r.hunter_data.error) && !hunterRunning.has(idx) ? `<button class="btn btn-yellow btn-sm" onclick="lookupHunter(${idx})">👤 DM</button>` : ''}
-      ${hunterRunning.has(idx) ? `<button class="btn btn-yellow btn-sm" disabled><span class="spinner"></span>DM…</button>` : ''}
-    </td>
-  </tr>`;
-}
-
-function croCellHtml(idx) {
-  const u   = urls[idx];
-  const r   = results[u.url] || {};
-  if (r.status !== 'done' && r.status !== undefined) return '<span class="text-slate-600 text-xs">—</span>';
-
-  const cro       = r.cro_audit;
-  const isRunning = croRunning.has(idx);
-  const hasScrape = !!r.html;
-
-  const btnLabel = cro ? '↺ Re-run' : '▶ Run CRO';
-  const startBtn = hasScrape
-    ? `<button id="cro-btn-${idx}" class="cro-start-btn" ${isRunning ? 'disabled' : ''} onclick="startCro(${idx})">${
-        isRunning ? '<span class="spinner"></span>Running…' : btnLabel
-      }</button>`
-    : '';
-
-  if (!cro) return startBtn || '<span class="text-slate-600 text-xs">—</span>';
-  if (cro.error) return `<span class="text-red-400 text-xs">Error: ${cro.error.slice(0,30)}</span> ${startBtn}`;
-
-  // Use client_summary (clean findings only) for badge display
-  const cs = cro.client_summary || cro.summary || {};
-  const badges = [
-    cs.high   > 0 ? `<span class="badge badge-red">${cs.high} HIGH</span>` : '',
-    cs.medium > 0 ? `<span class="badge badge-yellow">${cs.medium} MED</span>` : '',
-    cs.low    > 0 ? `<span class="badge badge-slate">${cs.low} LOW</span>` : '',
-  ].filter(Boolean).join(' ') || '<span class="badge badge-green">✓ Pass</span>';
-
-  return `<div class="flex flex-wrap gap-1 items-center">
-    ${badges}
-    <button class="btn btn-slate btn-sm" onclick="showCroModal(${idx})">Detail</button>
-    <button class="btn btn-green btn-sm" onclick="dlCro(${idx})">↓</button>
-    ${startBtn}
-  </div>`;
-}
-
-function contactCellHtml(idx) {
-  const u = urls[idx];
-  const r = results[u.url] || {};
-  const h = r.hunter_data;
-
-  if (!h) return '<span class="text-slate-600 text-xs">—</span>';
-
-  if (h.error) {
-    return `<span class="text-red-400 text-xs" title="${escHtml(h.error)}">⚠ ${escHtml(h.error.slice(0,40))}</span>`;
-  }
-
-  if (!h.found) {
-    const tip = `Domain: ${h.domain || '?'} | Emails indexed: ${h.total ?? 0}`;
-    return `<span class="text-slate-400 text-xs" title="${escHtml(tip)}">No contacts found<br><span class="text-slate-600">(${h.total ?? 0} emails indexed)</span></span>`;
-  }
-
-  const top = h.top_contacts || [];
-  const c   = top[0] || {};
-  const company = h.company_name ? `<div class="text-slate-500">${escHtml(h.company_name)}</div>` : '';
-  const li  = c.linkedin ? `<a href="${escHtml(c.linkedin)}" target="_blank" class="text-indigo-400 hover:underline">LinkedIn ↗</a>` : '';
-  const ph  = c.phone    ? `<div class="text-slate-400">${escHtml(c.phone)}</div>` : '';
-
-  // Only show "Audit site" if the company_website wasn't already scraped
-  const siteUrl     = h.company_website || ('https://' + h.domain);
-  const alreadyDone = results[siteUrl] && results[siteUrl].status === 'done';
-  const auditBtn    = !alreadyDone
-    ? `<button class="btn btn-primary btn-sm mt-1" onclick="auditDmSite(${idx})" title="Scrape &amp; audit ${escHtml(siteUrl)}">⚙ Audit Site</button>`
-    : `<span class="text-green-400 text-xs">✓ audited</span>`;
-
-  return `<div class="text-xs space-y-0.5">
-    ${company}
-    <div class="text-green-400 font-semibold">${escHtml(c.name || 'Contact')}</div>
-    <div class="text-slate-300">${escHtml(c.position || '')}</div>
-    ${c.seniority ? `<div class="text-slate-500 capitalize">${escHtml(c.seniority)}</div>` : ''}
-    <div class="text-indigo-300">${escHtml(c.email || '')}</div>
-    ${ph}${li}
-    <div class="flex gap-1 mt-1 flex-wrap">
-      <button class="btn btn-green btn-sm" onclick="dlContact(${idx})">↓ CSV</button>
-      ${auditBtn}
-    </div>
-    ${top.length > 1 ? `<div class="text-slate-600 mt-1">+${top.length-1} more in CSV</div>` : ''}
-  </div>`;
-}
-
-function updateRow(idx) {
-  const row = document.getElementById(`row-${idx}`);
-  if (row) row.outerHTML = rowHtml(idx);
-}
-
-function updateStats() {
-  const total   = urls.length;
-  const done    = Object.values(results).filter(r => r.status === 'done').length;
-  const errors  = Object.values(results).filter(r => r.status === 'error').length;
-  const croDone = Object.values(results).filter(r => r.cro_audit && !r.cro_audit.error).length;
-  document.getElementById('stats').textContent =
-    total ? `${done}/${total} done  •  ${errors} errors  •  ${croDone} CRO` : '';
-}
-
-// ── Run single URL ────────────────────────────────────────────────────────────
-async function runOne(idx) {
-  const u = urls[idx];
-  results[u.url] = {status: 'running'};
-  updateRow(idx);
-
-  const base = apiBase();
-  if (!base) { alert('Set API URL in config'); results[u.url].status = 'pending'; updateRow(idx); return; }
-
-  try {
-    const resp = await fetch(base + '/scrape', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({url: u.url, industry: industry(), run_cro: true}),
-    });
-    const data = await resp.json();
-    if (data.error) {
-      results[u.url] = {status: 'error', error: data.error};
-    } else {
-      results[u.url] = {status: 'done', ...data};
-    }
-  } catch(e) {
-    results[u.url] = {status: 'error', error: e.message};
-  }
-  updateRow(idx);
-  updateStats();
-}
-
-// ── Run all ───────────────────────────────────────────────────────────────────
-async function runAll() {
-  if (running) return;
-  const base = apiBase();
-  if (!base) { alert('Set API URL in config'); return; }
-  if (!urls.length) { alert('Load a file first'); return; }
-  running  = true;
-  stopFlag = false;
-  document.getElementById('btn-stop').disabled = false;
-  document.getElementById('btn-run').disabled  = true;
-
-  const pending = urls.map((_,i) => i).filter(i => {
-    const st = (results[urls[i].url] || {}).status;
-    return !st || st === 'pending' || st === 'error';
+function processRows(rows, filename) {
+  if (!rows.length) { alert('File is empty.'); return; }
+  // detect URL columns
+  const urlCols = [];
+  rows[0].forEach((_, ci) => {
+    const hits = rows.slice(1, 11).filter(r => isUrl(r[ci])).length;
+    if (hits) urlCols.push(ci);
   });
-
-  const workers = workerCount();
-  const pool    = [...pending];
-
-  async function worker() {
-    while (pool.length && !stopFlag) {
-      const idx = pool.shift();
-      await runOne(idx);
-    }
-  }
-
-  await Promise.all(Array.from({length: workers}, worker));
-  running = false;
-  document.getElementById('btn-stop').disabled = true;
-  document.getElementById('btn-run').disabled  = false;
-}
-
-function stopAll() {
-  stopFlag = true;
-  document.getElementById('btn-stop').disabled = true;
-}
-
-function clearAll() {
-  if (!confirm('Clear all data?')) return;
-  urls    = [];
+  const seen = new Set();
+  urls = [];
+  const push = v => {
+    v = v.trim();
+    if (!seen.has(v)) { seen.add(v); urls.push({ url: v, idx: urls.length }); }
+  };
+  if (urlCols.length)
+    rows.slice(1).forEach(r => urlCols.forEach(ci => isUrl(r[ci]) && push(r[ci])));
+  else
+    rows.slice(1).forEach(r => r.forEach(c => isUrl(c) && push(c)));
+  urls.forEach((u, i) => (u.idx = i));
   results = {};
+  $('urlSection').classList.remove('hidden');
+  $('urlHeading').textContent   = urls.length + ' URL' + (urls.length !== 1 ? 's' : '') + ' found';
+  $('urlSubheading').textContent = 'From: ' + filename;
   renderTable();
   updateStats();
 }
 
-// ── CRO per-row start ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Stats
+// ---------------------------------------------------------------------------
+function updateStats() {
+  const vals = Object.values(results);
+  $('statsBar').classList.remove('hidden');
+  $('statTotal').textContent = urls.length;
+  $('statDone').textContent  = vals.filter(r => r.status === 'done').length;
+  $('statNoDm').textContent  = vals.filter(r => r.status === 'no_dm').length;
+  $('statError').textContent = vals.filter(r => r.status === 'error').length;
+  $('statCro').textContent   = vals.filter(r => r.cro_audit && !r.cro_audit.error).length;
+}
+
+// ---------------------------------------------------------------------------
+// Table rendering
+// ---------------------------------------------------------------------------
+function renderTable() {
+  const tbody = $('urlTableBody');
+  tbody.innerHTML = '';
+  urls.forEach((u, i) => {
+    const tr = document.createElement('tr');
+    tr.id = 'row-' + i;
+    tr.className = 'border-b border-slate-800 hover:bg-slate-800/30';
+    tr.innerHTML  = rowCells(u, i);
+    tbody.appendChild(tr);
+  });
+}
+
+function dmHtml(hd) {
+  if (!hd) return '<span class="text-slate-600">&mdash;</span>';
+  if (!hd.found) return '<span class="tag-nodm">No DM</span>' +
+    (hd.error ? '<br><span class="text-slate-500 text-xs">' + esc(hd.error) + '</span>' : '');
+  const name  = [hd.first_name, hd.last_name].filter(Boolean).join(' ') || '&mdash;';
+  const title = hd.title ? '<br><span class="text-slate-400 text-xs">' + esc(hd.title) + '</span>' : '';
+  return '<span class="tag-dm">&#10003; DM</span><br>' +
+    '<span class="text-white text-xs font-medium">' + esc(name) + '</span>' + title;
+}
+function emailHtml(hd) {
+  if (!hd || !hd.found || !hd.email) return '<span class="text-slate-600">&mdash;</span>';
+  return '<a href="mailto:' + esc(hd.email) + '" class="text-indigo-400 hover:underline text-xs">'
+    + esc(hd.email) + '</a>';
+}
+function phoneHtml(hd) {
+  if (!hd || !hd.found || !hd.phone) return '<span class="text-slate-600">&mdash;</span>';
+  return '<span class="text-slate-300 text-xs">' + esc(hd.phone) + '</span>';
+}
+
+function croCellHtml(idx) {
+  const r      = results[urls[idx].url] || {};
+  const status = r.status || 'pending';
+  if (status !== 'done') return '<span class="text-slate-600 text-xs">&mdash;</span>';
+
+  const cro      = r.cro_audit;
+  const isRunning = croRunning.has(idx);
+
+  // Start / re-run button
+  const btnLabel  = cro ? '&#8635; Re-run' : '&#9654; Run CRO';
+  const startBtn  = `<button id="cro-btn-${idx}" class="cro-start-btn" ${
+    isRunning ? 'disabled' : ''
+  } onclick="startCro(${idx})">${isRunning ? '<span class="spinner"></span>Running…' : btnLabel}</button>`;
+
+  if (!cro) return startBtn;
+  if (cro.error) return `<span class="text-red-400 text-xs">Error</span> ${startBtn}`;
+
+  const s    = cro.summary || {};
+  const high = s.confirmed_high  || 0;
+  const med  = s.confirmed_medium || 0;
+  const gaps = s.gaps_detected   || 0;
+  const badges = !high && !med && !gaps
+    ? '<span class="text-green-400 text-xs">&#10003; Clean</span>'
+    : `${high ? '<span class="cro-badge-high">' + high + ' HIGH</span> ' : ''}
+       ${med  ? '<span class="cro-badge-medium">' + med + ' MED</span> ' : ''}
+       ${gaps ? '<span class="cro-badge-gap">' + gaps + ' gaps</span>' : ''}`;
+
+  return `<div class="flex flex-col gap-1">
+    <button onclick="openCro(${idx})" class="text-left hover:opacity-80">${badges}</button>
+    ${startBtn}
+  </div>`;
+}
+
+function rowCells(u, i) {
+  const r      = results[u.url] || {};
+  const status = r.status || 'pending';
+  const hd     = r.hunter_data || null;
+  const hasDone = status === 'done';
+  const hasCro  = hasDone && r.cro_audit && !r.cro_audit.error;
+  const LABEL  = { pending: 'Pending',
+    running: '<span class="spinner"></span>Scraping…',
+    done: 'Done', error: 'Error', no_dm: 'No DM' };
+  const thumb  = r.screenshot_b64
+    ? `<img class="thumb-img" src="data:image/png;base64,${r.screenshot_b64}"
+           onclick="openModal(${i})" title="Click to enlarge" />`
+    : (hasDone ? '<span class="text-slate-500 text-xs">None</span>' : '&mdash;');
+
+  return `
+    <td class="px-3 py-3">
+      <input type="checkbox" class="url-check" data-idx="${i}"
+             ${status !== 'no_dm' ? 'checked' : ''} />
+    </td>
+    <td class="px-3 py-3 text-slate-400 text-xs">${i + 1}</td>
+    <td class="px-3 py-3" style="min-width:160px;max-width:200px">
+      <a href="${u.url}" target="_blank"
+         class="text-indigo-400 hover:underline text-xs break-all">${esc(u.url)}</a>
+    </td>
+    <td class="px-3 py-3 status-${status} text-xs" id="status-${i}">
+      ${LABEL[status] || 'Pending'}
+      ${r.error ? '<br><span class="text-red-400">' + esc(String(r.error).substring(0, 60)) + '</span>' : ''}
+    </td>
+    <td class="px-3 py-3" id="dm-${i}" style="min-width:150px">${dmHtml(hd)}</td>
+    <td class="px-3 py-3" id="email-${i}">${emailHtml(hd)}</td>
+    <td class="px-3 py-3" id="phone-${i}">${phoneHtml(hd)}</td>
+    <td class="px-3 py-3 text-slate-300 text-xs" id="elems-${i}">
+      ${hasDone ? (r.dom_summary ? r.dom_summary.total_elements : 0) : '&mdash;'}
+    </td>
+    <td class="px-3 py-3" id="cro-${i}">${croCellHtml(i)}</td>
+    <td class="px-3 py-3" id="thumb-${i}">${thumb}</td>
+    <td class="px-3 py-3" id="dl-${i}">${dlCellHtml(i, hasDone, hasCro, r)}</td>
+  `;
+}
+
+function dlCellHtml(idx, hasDone, hasCro, r) {
+  const hasSS = hasDone && !!r.screenshot_b64;
+  const hasDM = hasDone || (r.status === 'no_dm');
+  return `<button class="dl-btn" ${hasDone ? '' : 'disabled'} onclick="dlHtml(${idx})">&#8595; HTML</button>
+<button class="dl-btn" ${hasDone ? '' : 'disabled'} onclick="dlJson(${idx})">&#8595; DOM JSON</button>
+<button class="dl-btn" ${hasSS ? '' : 'disabled'} onclick="dlScreenshot(${idx})">&#8595; Screenshot</button>
+<button class="dl-btn" ${hasCro ? '' : 'disabled'} onclick="dlCro(${idx})">&#8595; CRO Report</button>
+<button class="dl-btn" ${hasDM ? '' : 'disabled'} onclick="dlContact(${idx})">&#8595; Contact</button>`;
+}
+
+function updateRow(idx) {
+  const u      = urls[idx];
+  const r      = results[u.url] || {};
+  const status = r.status || 'pending';
+  const hd     = r.hunter_data || null;
+  const hasDone = status === 'done';
+  const hasCro  = hasDone && r.cro_audit && !r.cro_audit.error;
+  const LABEL  = { pending: 'Pending',
+    running: '<span class="spinner"></span>Scraping…',
+    done: 'Done', error: 'Error', no_dm: 'No DM' };
+
+  const sc = $('status-' + idx);
+  if (sc) {
+    sc.className = 'px-3 py-3 status-' + status + ' text-xs';
+    sc.innerHTML = (LABEL[status] || 'Pending') +
+      (r.error ? '<br><span class="text-red-400">' + esc(String(r.error).substring(0, 60)) + '</span>' : '');
+  }
+  const dm = $('dm-'    + idx); if (dm) dm.innerHTML = dmHtml(hd);
+  const em = $('email-' + idx); if (em) em.innerHTML = emailHtml(hd);
+  const ph = $('phone-' + idx); if (ph) ph.innerHTML = phoneHtml(hd);
+  const el = $('elems-' + idx);
+  if (el) el.textContent = hasDone ? (r.dom_summary ? r.dom_summary.total_elements : 0) : '—';
+
+  const cr = $('cro-' + idx); if (cr) cr.innerHTML = croCellHtml(idx);
+
+  const th = $('thumb-' + idx);
+  if (th) {
+    if (r.screenshot_b64)
+      th.innerHTML = `<img class="thumb-img" src="data:image/png;base64,${r.screenshot_b64}"
+                          onclick="openModal(${idx})" title="Click to enlarge" />`;
+    else if (hasDone)
+      th.innerHTML = '<span class="text-slate-500 text-xs">None</span>';
+  }
+
+  const dl = $('dl-' + idx);
+  if (dl) dl.innerHTML = dlCellHtml(idx, hasDone, hasCro, r);
+
+  updateStats();
+}
+
+// ---------------------------------------------------------------------------
+// Scraping
+// ---------------------------------------------------------------------------
+function getSelected() {
+  return [...document.querySelectorAll('.url-check:checked')]
+    .map(cb => urls[parseInt(cb.dataset.idx)]);
+}
+
+async function runScraping() {
+  if (running) return;
+  const selected = getSelected();
+  if (!selected.length) { alert('Select at least one URL.'); return; }
+  running = true;
+  $('runBtn').disabled    = true;
+  $('runBtn').textContent = 'Running…';
+  $('overallProgress').classList.remove('hidden');
+  let done = 0;
+  const total = selected.length;
+  const tick = () => {
+    done++;
+    $('progressCount').textContent = done + ' / ' + total;
+    $('progressBar').style.width   = Math.round(done / total * 100) + '%';
+    $('progressLabel').textContent = done === total ? 'Complete!' : 'Running…';
+  };
+  if (mode === 'sequential') {
+    for (const u of selected) { await scrapeOne(u); tick(); }
+  } else {
+    const w = parseInt($('workerCount').value) || 3;
+    const q = [...selected];
+    await Promise.all(
+      Array.from({ length: Math.min(w, selected.length) }, async () => {
+        while (q.length) { const u = q.shift(); await scrapeOne(u); tick(); }
+      })
+    );
+  }
+  running = false;
+  $('runBtn').disabled    = false;
+  $('runBtn').textContent = '▶ Run Scraper';
+  checkApi();
+}
+
+async function scrapeOne(u) {
+  results[u.url] = { status: 'running' };
+  updateRow(u.idx);
+  try {
+    const body = { url: u.url, industry: industry() };
+    if (hunterKey()) body.hunter_api_key = hunterKey();
+    if (skipHunt())  body.skip_hunter   = true;
+    const resp = await fetch(apiBase() + '/scrape', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const data = await resp.json();
+    if (data.error)            results[u.url] = { status: 'error', error: data.error };
+    else if (data.no_decision_maker) results[u.url] = { status: 'no_dm', hunter_data: data.hunter_data };
+    else                       results[u.url] = { ...data, status: 'done' };
+  } catch (err) {
+    results[u.url] = { status: 'error', error: err.message };
+  }
+  updateRow(u.idx);
+}
+
+// ---------------------------------------------------------------------------
+// Per-row CRO audit
+// ---------------------------------------------------------------------------
 async function startCro(idx) {
-  if (croRunning.has(idx)) return;
   const u = urls[idx];
-  const r = results[u.url] || {};
-  if (!r.html) { alert('Scrape the URL first (▶ Run)'); return; }
-
-  const base = apiBase();
-  if (!base) { alert('Set API URL'); return; }
-
+  const r = results[u.url];
+  if (!r || r.status !== 'done' || !r.html) {
+    alert('Scrape this URL first before running CRO audit.'); return;
+  }
+  if (croRunning.has(idx)) return;
   croRunning.add(idx);
-  updateRow(idx);
+  // Re-render button as running
+  const cell = $('cro-' + idx);
+  if (cell) cell.innerHTML = croCellHtml(idx);
 
   try {
-    const resp = await fetch(base + '/cro', {
+    const resp = await fetch(apiBase() + '/cro', {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         html:         r.html,
         dom_elements: (r.dom_states || {}).elements || [],
@@ -473,300 +574,209 @@ async function startCro(idx) {
         url:          u.url,
       }),
     });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
     const audit = await resp.json();
     results[u.url].cro_audit = audit;
-    if (audit && !audit.error) setTimeout(() => dlCro(idx), 200);
-  } catch(e) {
-    results[u.url].cro_audit = {error: e.message};
+    // Auto-download immediately after run
+    if (audit && !audit.error) {
+      setTimeout(() => dlCro(idx), 200);
+    }
+  } catch (err) {
+    results[u.url].cro_audit = { error: err.message };
   }
   croRunning.delete(idx);
   updateRow(idx);
-  updateStats();
 }
 
-// ── Run all CRO ───────────────────────────────────────────────────────────────
 async function runAllCro() {
-  const base = apiBase();
-  if (!base) { alert('Set API URL'); return; }
+  const doneIdxs = urls
+    .filter(u => results[u.url] && results[u.url].status === 'done'
+                  && results[u.url].html && !croRunning.has(u.idx))
+    .map(u => u.idx);
+  if (!doneIdxs.length) { alert('No scraped URLs ready for CRO audit.'); return; }
+  // Run with same worker limit as scraping mode
+  const w = mode === 'parallel' ? (parseInt($('workerCount').value) || 3) : 1;
+  const q = [...doneIdxs];
+  await Promise.all(
+    Array.from({ length: Math.min(w, doneIdxs.length) }, async () => {
+      while (q.length) { const idx = q.shift(); await startCro(idx); }
+    })
+  );
+}
 
-  const pending = urls.map((_,i) => i).filter(i => {
-    const r = results[urls[i].url] || {};
-    return r.status === 'done' && r.html && (!r.cro_audit || r.cro_audit.error);
+// ---------------------------------------------------------------------------
+// Select helpers
+// ---------------------------------------------------------------------------
+const selectAll  = () => document.querySelectorAll('.url-check').forEach(cb => cb.checked = true);
+const selectNone = () => document.querySelectorAll('.url-check').forEach(cb => cb.checked = false);
+const toggleAll  = m  => document.querySelectorAll('.url-check').forEach(cb => cb.checked = m.checked);
+
+// ---------------------------------------------------------------------------
+// Modals
+// ---------------------------------------------------------------------------
+function openModal(idx) {
+  const r = results[urls[idx].url];
+  if (!r || !r.screenshot_b64) return;
+  $('modalImg').src = 'data:image/png;base64,' + r.screenshot_b64;
+  $('modal').classList.remove('hidden');
+}
+const closeModal = () => $('modal').classList.add('hidden');
+
+function openCro(idx) {
+  const r = results[urls[idx].url];
+  if (!r || !r.cro_audit) return;
+  const cro = r.cro_audit;
+  $('croModalTitle').textContent =
+    'CRO Audit — ' + urls[idx].url.replace(/^https?:\/\/(www\.)?/, '').substring(0, 55);
+  const issues = (cro.issues || []).filter(i => i.decision !== 'suppressed');
+  const s = cro.summary || {};
+  let html = `<div class="flex gap-3 mb-5 flex-wrap text-xs">
+    <span class="cro-badge-high">${s.confirmed_high  || 0} HIGH</span>
+    <span class="cro-badge-medium">${s.confirmed_medium || 0} MEDIUM</span>
+    <span class="cro-badge-gap">${s.gaps_detected   || 0} GAPS</span>
+    <span class="text-slate-500">${s.suppressed || 0} suppressed</span>
+  </div>`;
+  issues.forEach(iss => {
+    const isGap     = (iss.id || '').startsWith('gap_');
+    const badgeClass = isGap ? 'cro-badge-gap'
+      : iss.severity === 'high' ? 'cro-badge-high' : 'cro-badge-medium';
+    const sevClass   = iss.severity === 'high' ? 'sev-high'
+      : iss.severity === 'medium' ? 'sev-medium' : 'sev-low';
+    const findings = (iss.findings || [])
+      .map(f => `<li class="text-slate-300 text-xs mb-1">${esc(f)}</li>`).join('');
+    const fix = iss.fix
+      ? `<div class="mt-2 text-xs text-indigo-300"><strong>Fix:</strong> ${esc(iss.fix)}</div>` : '';
+    html += `<div class="cro-panel mb-3">
+      <div class="flex items-start gap-2 mb-1">
+        <span class="${badgeClass} mt-0.5 shrink-0">${(iss.severity || 'info').toUpperCase()}</span>
+        <span class="${sevClass} text-sm">${esc(iss.title || iss.id || '')}</span>
+      </div>
+      <ul class="ml-3 mt-1 list-disc list-inside">${findings}</ul>${fix}
+    </div>`;
   });
-
-  if (!pending.length) { alert('No scraped pages without CRO data found'); return; }
-
-  const pool    = [...pending];
-  const workers = Math.min(workerCount(), pool.length);
-
-  async function worker() {
-    while (pool.length) {
-      await startCro(pool.shift());
-    }
-  }
-
-  await Promise.all(Array.from({length: workers}, worker));
+  if (!issues.length)
+    html += '<p class="text-green-400 text-sm">No confirmed issues — page looks clean.</p>';
+  $('croModalBody').innerHTML = html;
+  $('croModal').classList.remove('hidden');
 }
+const closeCroModal = () => $('croModal').classList.add('hidden');
 
-// ── Hunter.io ─────────────────────────────────────────────────────────────────
-async function lookupHunter(idx) {
-  if (hunterRunning.has(idx)) return;
-  const u    = urls[idx];
-  const base = apiBase();
-  if (!base) { alert('Set API URL'); return; }
+// ---------------------------------------------------------------------------
+// Downloads
+// ---------------------------------------------------------------------------
+const slugify = url => {
+  try { return new URL(url).hostname.replace(/^www\./, '').replace(/[^a-z0-9]/gi, '_'); }
+  catch { return 'page'; }
+};
 
-  // Ensure results entry exists
-  if (!results[u.url]) results[u.url] = {status: 'pending'};
-
-  // Parse domain safely
-  let domain;
-  try {
-    const parsed = new URL(u.url.startsWith('http') ? u.url : 'https://' + u.url);
-    domain = parsed.hostname.replace(/^www\./, '');
-  } catch(_) {
-    domain = u.url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0];
-  }
-  if (!domain) { alert('Cannot parse domain from: ' + u.url); return; }
-
-  hunterRunning.add(idx);
-  updateRow(idx);
-
-  const key = hunterKey();
-  try {
-    const resp = await fetch(base + '/hunter', {
-      method:  'POST',
-      headers: {'Content-Type': 'application/json'},
-      body:    JSON.stringify({domain, api_key: key}),
-    });
-    const data = await resp.json();
-    results[u.url].hunter_data = resp.ok
-      ? data
-      : {found: false, error: data.error || `HTTP ${resp.status}`};
-  } catch(e) {
-    results[u.url].hunter_data = {found: false, error: e.message};
-  }
-
-  hunterRunning.delete(idx);
-  updateRow(idx);
-}
-
-// After Hunter finds a DM, scrape + CRO their company site
-async function auditDmSite(idx) {
-  const u = urls[idx];
-  const h = (results[u.url] || {}).hunter_data;
-  if (!h || !h.found) return;
-
-  const siteUrl = h.company_website || ('https://' + h.domain);
-
-  // Add to urls list if not already there
-  const existing = urls.findIndex(x => x.url === siteUrl);
-  let targetIdx;
-  if (existing >= 0) {
-    targetIdx = existing;
-  } else {
-    urls.push({url: siteUrl, name: h.company_name || h.domain});
-    results[siteUrl] = {status: 'pending'};
-    targetIdx = urls.length - 1;
-    renderTable();
-  }
-
-  // Scroll to row and run scrape+CRO
-  const row = document.getElementById(`row-${targetIdx}`);
-  if (row) row.scrollIntoView({behavior: 'smooth', block: 'center'});
-  await runOne(targetIdx);
-  updateStats();
-}
-
-// Run Hunter for every scraped-but-not-yet-DM'd URL
-async function runAllHunter() {
-  const base = apiBase();
-  if (!base) { alert('Set API URL'); return; }
-
-  const pending = urls.map((_,i) => i).filter(i => {
-    const r = results[urls[i].url] || {};
-    return r.status === 'done' && !r.hunter_data && !hunterRunning.has(i);
-  });
-
-  if (!pending.length) { alert('No completed rows without Hunter data found'); return; }
-
-  const pool = [...pending];
-  async function worker() {
-    while (pool.length) await lookupHunter(pool.shift());
-  }
-  await Promise.all(Array.from({length: Math.min(2, pool.length)}, worker));
-}
-
-// ── Downloads ─────────────────────────────────────────────────────────────────
-function dlHtml(idx) {
-  const r = results[urls[idx].url] || {};
-  if (!r.html) return;
-  _download(r.html, `${safeFilename(urls[idx])}_rendered.html`, 'text/html');
-}
-
-function dlJson(idx) {
-  const r = results[urls[idx].url] || {};
-  if (!r.dom_states) return;
-  _download(JSON.stringify(r.dom_states, null, 2), `${safeFilename(urls[idx])}_dom_states.json`, 'application/json');
-}
-
-function dlScreenshot(idx) {
-  const r = results[urls[idx].url] || {};
-  if (!r.screenshot_b64) return;
+function triggerDownload(href, filename) {
   const a = document.createElement('a');
-  a.href     = 'data:image/png;base64,' + r.screenshot_b64;
-  a.download = `${safeFilename(urls[idx])}_screenshot.png`;
-  a.click();
+  a.href = href; a.download = filename; a.click();
+  setTimeout(() => URL.revokeObjectURL(href), 8000);
 }
 
+function dlHtml(idx) {
+  const r = results[urls[idx].url];
+  if (!r || !r.html) return;
+  triggerDownload(
+    URL.createObjectURL(new Blob([r.html], { type: 'text/html' })),
+    slugify(urls[idx].url) + '_rendered.html'
+  );
+}
+function dlJson(idx) {
+  const r = results[urls[idx].url];
+  if (!r || !r.dom_states) return;
+  triggerDownload(
+    URL.createObjectURL(new Blob([JSON.stringify(r.dom_states, null, 2)],
+      { type: 'application/json' })),
+    slugify(urls[idx].url) + '_dom_states.json'
+  );
+}
+function dlScreenshot(idx) {
+  const r = results[urls[idx].url];
+  if (!r || !r.screenshot_b64) return;
+  const b = atob(r.screenshot_b64);
+  const ab = new ArrayBuffer(b.length);
+  const ia = new Uint8Array(ab);
+  for (let i = 0; i < b.length; i++) ia[i] = b.charCodeAt(i);
+  triggerDownload(
+    URL.createObjectURL(new Blob([ab], { type: 'image/png' })),
+    slugify(urls[idx].url) + '_screenshot.png'
+  );
+}
 function dlCro(idx) {
-  const r = results[urls[idx].url] || {};
-  if (!r.cro_audit || r.cro_audit.error) {
-    alert('CRO report not available. Click ▶ Run CRO in the CRO Audit column first.');
-    return;
+  const r = results[urls[idx].url];
+  if (!r || !r.cro_audit || r.cro_audit.error) {
+    alert('CRO report not available. Click ▶ Run CRO in the CRO Audit column first.'); return;
   }
-  _download(JSON.stringify(r.cro_audit, null, 2), `${safeFilename(urls[idx])}_cro_audit.json`, 'application/json');
+  triggerDownload(
+    URL.createObjectURL(new Blob([JSON.stringify(r.cro_audit, null, 2)],
+      { type: 'application/json' })),
+    slugify(urls[idx].url) + '_cro_audit.json'
+  );
 }
-
 function dlContact(idx) {
-  const r = results[urls[idx].url] || {};
-  const h = r.hunter_data;
-  if (!h || !h.found) return;
-  const rows = [['Company','Name','Email','Position','Seniority','Department','LinkedIn','Phone','Score']];
-  for (const c of (h.top_contacts || [])) {
-    rows.push([
-      h.company_name || h.domain || '',
-      c.name, c.email, c.position, c.seniority,
-      c.department, c.linkedin, c.phone, c.score,
-    ]);
-  }
-  const csv = rows.map(r => r.map(v => `"${(v||'').toString().replace(/"/g,'""')}"`).join(',')).join('\n');
-  _download(csv, `${safeFilename(urls[idx])}_contacts.csv`, 'text/csv');
+  const r  = results[urls[idx].url];
+  if (!r) return;
+  const hd = r.hunter_data || {};
+  const csv = [
+    'URL,First Name,Last Name,Title,Email,Phone,Confidence,Status',
+    [urls[idx].url, hd.first_name||'', hd.last_name||'', hd.title||'',
+     hd.email||'', hd.phone||'', hd.confidence||'', r.status]
+      .map(c => '"' + String(c).replace(/"/g, '""') + '"').join(',')
+  ].join('\n');
+  triggerDownload(
+    'data:text/csv;charset=utf-8,' + encodeURIComponent(csv),
+    slugify(urls[idx].url) + '_contact.csv'
+  );
 }
 
+// Parallel download-all: stagger 80ms between triggers to avoid browser blocking
 function downloadAll() {
   const tasks = [];
   urls.forEach((u, i) => {
     const r = results[u.url];
     if (!r || r.status !== 'done') return;
-    if (r.html)            tasks.push(() => dlHtml(i));
-    if (r.dom_states)      tasks.push(() => dlJson(i));
-    if (r.screenshot_b64)  tasks.push(() => dlScreenshot(i));
+    if (r.html)           tasks.push(() => dlHtml(i));
+    if (r.dom_states)     tasks.push(() => dlJson(i));
+    if (r.screenshot_b64) tasks.push(() => dlScreenshot(i));
     if (r.cro_audit && !r.cro_audit.error) tasks.push(() => dlCro(i));
     if (r.hunter_data && r.hunter_data.found) tasks.push(() => dlContact(i));
   });
-  if (!tasks.length) { alert('No completed results to download'); return; }
+  if (!tasks.length) { alert('No completed scrapes to download.'); return; }
   tasks.forEach((fn, i) => setTimeout(fn, i * 80));
 }
 
-function _download(content, filename, type) {
-  const blob = new Blob([content], {type});
-  const url  = URL.createObjectURL(blob);
-  const a    = document.createElement('a');
-  a.href     = url;
-  a.download = filename;
+// ---------------------------------------------------------------------------
+// Export CSV
+// ---------------------------------------------------------------------------
+function exportCsv() {
+  const rows = [['#','URL','Status','First Name','Last Name','Title',
+    'Email','Phone','Confidence','Elements','CRO High','CRO Medium','CRO Gaps','Error']];
+  urls.forEach((u, i) => {
+    const r  = results[u.url] || {};
+    const hd = r.hunter_data  || {};
+    const cro = (r.cro_audit && !r.cro_audit.error) ? r.cro_audit : {};
+    const cs  = cro.summary || {};
+    rows.push([
+      i + 1, u.url, r.status || 'pending',
+      hd.first_name || '', hd.last_name || '', hd.title || '',
+      hd.email || '', hd.phone || '', hd.confidence || '',
+      r.dom_summary ? r.dom_summary.total_elements : '',
+      cs.confirmed_high  !== undefined ? cs.confirmed_high  : '',
+      cs.confirmed_medium !== undefined ? cs.confirmed_medium : '',
+      cs.gaps_detected   !== undefined ? cs.gaps_detected   : '',
+      r.error || '',
+    ]);
+  });
+  const csv = rows.map(r =>
+    r.map(c => '"' + String(c).replace(/"/g, '""') + '"').join(',')
+  ).join('\n');
+  const a = document.createElement('a');
+  a.href     = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
+  a.download = 'scrape_results.csv';
   a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
-
-function safeFilename(u) {
-  return (u.name || u.url).replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 60);
-}
-
-// ── CRO Modal ────────────────────────────────────────────────────────────────
-function showCroModal(idx) {
-  const u   = urls[idx];
-  const r   = results[u.url] || {};
-  const cro = r.cro_audit;
-  if (!cro || cro.error) return;
-
-  document.getElementById('cro-modal-title').textContent = `CRO Report — ${u.name || u.url}`;
-
-  const m = cro.meta || {};
-  document.getElementById('cro-modal-meta').textContent =
-    `Industry: ${m.industry || '—'}  •  Generated: ${(m.generated_at || '').slice(0,19).replace('T',' ')}`;
-
-  // Use client_summary for badge counts (clean client-facing view)
-  const cs = cro.client_summary || {};
-  const s  = cro.summary || {};
-  const hasClientSummary = cro.client_summary != null;
-  const high   = hasClientSummary ? (cs.high   || 0) : (s.confirmed_high   || 0);
-  const medium = hasClientSummary ? (cs.medium || 0) : (s.confirmed_medium || 0);
-  const low    = hasClientSummary ? (cs.low    || 0) : 0;
-
-  let summaryHtml = [
-    high   ? `<span class="badge badge-red text-sm px-2 py-1">${high} High</span>`     : '',
-    medium ? `<span class="badge badge-yellow text-sm px-2 py-1">${medium} Medium</span>` : '',
-    low    ? `<span class="badge badge-slate text-sm px-2 py-1">${low} Low</span>`      : '',
-    (!high && !medium && !low) ? `<span class="badge badge-green text-sm px-2 py-1">✓ No Issues</span>` : '',
-  ].join('');
-
-  // Internal toggle state
-  const internalKey = `cro_internal_${idx}`;
-  const showInternal = window[internalKey] || false;
-  summaryHtml += `
-    <button class="btn btn-slate btn-sm ml-auto text-xs" onclick="toggleInternalCro(${idx})">
-      ${showInternal ? 'Hide internal' : 'Show full audit'}
-    </button>`;
-  document.getElementById('cro-modal-summary').innerHTML = summaryHtml;
-
-  // Choose which issue list to show
-  const clientIssues   = cro.client_report || [];
-  const internalIssues = cro.issues || [];
-  const displayIssues  = showInternal ? internalIssues : clientIssues;
-
-  function renderIssue(issue) {
-    const sev = issue.severity || 'low';
-    const dec = issue.decision || 'confirmed';
-    const isGap = issue.origin === 'gap_detector';
-    const isAi  = issue.origin === 'ai_bot';
-    const decBadge = dec === 'suppressed'
-      ? '<span class="badge badge-slate">suppressed</span>'
-      : dec === 'verification_required'
-        ? '<span class="badge badge-yellow">verify</span>'
-        : '<span class="badge badge-green">confirmed</span>';
-
-    return `<div class="issue-card ${sev}${isGap ? ' gap' : ''}">
-      <div class="flex gap-2 items-start flex-wrap mb-1">
-        <span class="badge ${sev === 'high' ? 'badge-red' : sev === 'medium' ? 'badge-yellow' : 'badge-slate'}">${sev.toUpperCase()}</span>
-        ${decBadge}
-        ${isGap ? '<span class="badge badge-slate text-xs">internal</span>' : ''}
-        ${isAi  ? '<span class="badge badge-slate text-xs">AI</span>' : ''}
-        <span class="font-semibold text-sm">${issue.title || issue.id}</span>
-      </div>
-      ${(issue.findings||[]).map(f => `<div class="text-xs text-slate-300 mb-1">• ${f}</div>`).join('')}
-      ${(issue.evidence||[]).length ? `<div class="text-xs text-slate-500 mt-1 italic">${(issue.evidence||[]).map(e=>`↳ ${e}`).join('<br>')}</div>` : ''}
-      ${issue.screenshot_crop ? `<div class="mt-2 rounded overflow-hidden border border-slate-700"><img src="data:image/png;base64,${issue.screenshot_crop}" class="w-full" alt="Page region for this issue" loading="lazy"/></div>` : ''}
-      ${issue.fix ? `<div class="text-xs text-indigo-300 mt-1 border-t border-slate-700 pt-1"><strong>Fix:</strong> ${issue.fix}</div>` : ''}
-      ${issue.revenue_signal ? `<div class="text-xs text-green-400 mt-1">${issue.revenue_signal}</div>` : ''}
-    </div>`;
-  }
-
-  document.getElementById('cro-modal-issues').innerHTML =
-    displayIssues.length
-      ? displayIssues.map(renderIssue).join('')
-      : `<div class="text-slate-400 text-sm">${showInternal ? 'No issues in full audit.' : 'No confirmed issues — site passes client checks.'}</div>`;
-
-  document.getElementById('cro-modal').style.display = 'flex';
-}
-
-function toggleInternalCro(idx) {
-  const key = `cro_internal_${idx}`;
-  window[key] = !window[key];
-  showCroModal(idx);  // re-render with toggled state
-}
-
-function closeCroModal() {
-  document.getElementById('cro-modal').style.display = 'none';
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-function escHtml(s) {
-  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
-
-// ── Init ──────────────────────────────────────────────────────────────────────
-loadConfig();
-pingApi();
 </script>
 </body>
 </html>
