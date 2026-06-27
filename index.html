@@ -44,6 +44,7 @@
   .stat-pill{background:#1e293b;border:1px solid #334155;border-radius:.5rem;padding:.3rem .8rem;font-size:.78rem;display:flex;gap:.35rem;align-items:center}
   .leads-progress-bar{height:6px;background:#334155;border-radius:3px;overflow:hidden;margin-top:.5rem}
   .leads-progress-fill{height:100%;background:#0d9488;border-radius:3px;transition:width .3s}
+  .hint{font-size:.68rem;color:#64748b;margin-top:.2rem}
 </style>
 </head>
 <body class="min-h-screen">
@@ -68,8 +69,9 @@
     <input id="hunter-key" type="text" placeholder="(optional)" class="w-44" oninput="saveConfig()"/>
   </div>
   <div>
-    <div class="text-xs text-slate-400 mb-1">Apify Key</div>
-    <input id="apify-key" type="text" placeholder="(for Get Leads)" class="w-44" oninput="saveConfig()"/>
+    <div class="text-xs text-slate-400 mb-1">Apify Token</div>
+    <input id="apify-key" type="text" placeholder="apify_api_XXXX…" class="w-44" oninput="sanitizeApifyKey(this);saveConfig()"/>
+    <div class="hint">Token only, not the URL</div>
   </div>
   <div>
     <div class="text-xs text-slate-400 mb-1">Industry</div>
@@ -95,7 +97,7 @@
   <button class="btn btn-slate btn-sm" onclick="pingApi()">&#x27F3; Ping</button>
 </div>
 
-<!-- Drop zone (hidden once file loaded) -->
+<!-- Drop zone -->
 <div id="drop-zone" class="drop-zone m-6 p-10 text-center cursor-pointer"
   onclick="document.getElementById('file-input').click()"
   ondragover="event.preventDefault();this.classList.add('over')"
@@ -107,10 +109,9 @@
   <input id="file-input" type="file" accept=".xlsx,.xls,.csv" class="hidden" onchange="handleFile(this)"/>
 </div>
 
-<!-- Main section (shown after file load) -->
+<!-- Main section -->
 <div id="main-section" class="hidden px-6 pb-6">
 
-  <!-- Heading + toolbar -->
   <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
     <div>
       <div class="text-white font-bold text-lg" id="url-heading">0 URLs found</div>
@@ -119,14 +120,13 @@
     <div class="flex flex-wrap gap-2">
       <button class="btn btn-slate btn-sm" onclick="selectAll()">Select all</button>
       <button class="btn btn-slate btn-sm" onclick="selectNone()">Deselect all</button>
-      <button class="btn btn-purple btn-sm" onclick="runAllCro()" id="btn-cro-all">▶ Run all CRO</button>
-      <button class="btn btn-yellow btn-sm" onclick="runAllHunter()" id="btn-dm-all">👤 Run all DM</button>
+      <button class="btn btn-purple btn-sm" onclick="runAllCro()">▶ Run all CRO</button>
+      <button class="btn btn-yellow btn-sm" onclick="runAllHunter()">👤 Run all DM</button>
       <button class="btn btn-green btn-sm" onclick="downloadAll()">↓ Download all</button>
       <button class="btn btn-slate btn-sm" onclick="clearAll()">✕ Clear</button>
     </div>
   </div>
 
-  <!-- Stats row -->
   <div class="flex flex-wrap gap-2 mb-4">
     <div class="stat-pill">Total: <span class="text-white font-semibold" id="st-total">0</span></div>
     <div class="stat-pill">Done: <span class="text-green-400 font-semibold" id="st-done">0</span></div>
@@ -135,7 +135,6 @@
     <div class="stat-pill">CRO done: <span class="text-indigo-400 font-semibold" id="st-cro">0</span></div>
   </div>
 
-  <!-- Progress bar -->
   <div id="progress-wrap" class="hidden card p-4 mb-4">
     <div class="flex justify-between text-sm mb-2">
       <span class="text-slate-300" id="progress-label">Running…</span>
@@ -146,7 +145,6 @@
     </div>
   </div>
 
-  <!-- Run buttons -->
   <div class="flex gap-2 mb-4 flex-wrap">
     <button id="btn-run" class="btn btn-primary" onclick="runAll()">▶ Run All</button>
     <button id="btn-stop" class="btn btn-slate" onclick="stopAll()" disabled>■ Stop</button>
@@ -157,7 +155,6 @@
     <button class="btn btn-teal btn-sm" onclick="openLeadsModal()">🎯 Get Leads</button>
   </div>
 
-  <!-- Table -->
   <div class="card overflow-hidden">
     <div style="overflow-x:auto;max-height:calc(100vh - 340px);overflow-y:auto">
       <table id="main-table">
@@ -185,6 +182,12 @@
     <div class="flex justify-between items-center mb-4">
       <div class="font-bold text-lg text-white">🎯 Get Leads from Google Maps</div>
       <button class="text-slate-400 hover:text-white text-xl" onclick="closeLeadsModal()">✕</button>
+    </div>
+
+    <!-- Token warning (shown when key looks wrong) -->
+    <div id="leads-key-warn" class="hidden mb-3 p-3 rounded" style="background:#451a03;border:1px solid #92400e">
+      <div class="text-yellow-300 text-xs font-semibold mb-1">⚠️ Apify Token issue</div>
+      <div class="text-yellow-200 text-xs" id="leads-key-warn-msg"></div>
     </div>
 
     <div class="grid grid-cols-2 gap-3 mb-3">
@@ -246,7 +249,7 @@
 
     <!-- Live status -->
     <div id="leads-status-wrap" class="hidden card p-3 mb-3">
-      <div class="text-xs text-slate-300 mb-1" id="leads-status-text"></div>
+      <div class="text-xs font-semibold mb-0.5" id="leads-status-text" style="color:#94a3b8"></div>
       <div class="leads-progress-bar">
         <div class="leads-progress-fill" id="leads-progress-fill" style="width:0%"></div>
       </div>
@@ -307,10 +310,38 @@ let leadsAbort    = false;
 const cfg = {
   api:      () => { let v = (document.getElementById('api-url').value || '').trim().replace(/\/$/, ''); if (v && !v.startsWith('http')) v = 'https://' + v; return v; },
   hunter:   () => document.getElementById('hunter-key').value.trim(),
-  apify:    () => document.getElementById('apify-key').value.trim(),
+  apify:    () => extractApifyToken(document.getElementById('apify-key').value.trim()),
   industry: () => document.getElementById('industry').value,
   workers:  () => parseInt(document.getElementById('workers').value) || 2,
 };
+
+// If the user pasted a full Apify URL, extract the token from it
+function extractApifyToken(raw) {
+  if (!raw) return '';
+  // Already looks like a token
+  if (/^apify_api_/i.test(raw) || (!raw.includes('http') && raw.length > 10)) return raw;
+  try {
+    const u = new URL(raw);
+    // ?token=apify_api_...
+    const t = u.searchParams.get('token');
+    if (t) return t;
+    // Path segments that look like tokens
+    for (const seg of u.pathname.split('/')) {
+      if (/^apify_api_/i.test(seg) || seg.length > 30) return seg;
+    }
+  } catch(_) {}
+  return raw; // return as-is and let Apify reject it with a proper error
+}
+
+function sanitizeApifyKey(input) {
+  const raw = input.value.trim();
+  if (!raw) return;
+  const token = extractApifyToken(raw);
+  if (token !== raw) {
+    input.value = token;
+    saveConfig();
+  }
+}
 
 function saveConfig() {
   localStorage.setItem('gtm_api',      document.getElementById('api-url').value);
@@ -401,8 +432,24 @@ function parseRows(rows, filename) {
 function openLeadsModal() {
   leadsAbort = false;
   document.getElementById('leads-status-wrap').classList.add('hidden');
+  document.getElementById('leads-key-warn').classList.add('hidden');
   document.getElementById('leads-spinner').classList.add('hidden');
   document.getElementById('btn-leads-search').disabled = false;
+
+  // Pre-flight token check
+  const raw = document.getElementById('apify-key').value.trim();
+  const tok = extractApifyToken(raw);
+  const warn = document.getElementById('leads-key-warn');
+  const warnMsg = document.getElementById('leads-key-warn-msg');
+  if (!tok) {
+    warn.classList.remove('hidden');
+    warnMsg.textContent = 'No Apify token found. Enter your token (starts with apify_api_…) in the "Apify Token" field in the config bar above, then re-open this modal.';
+  } else if (raw !== tok) {
+    // Auto-fixed — update the field
+    document.getElementById('apify-key').value = tok;
+    saveConfig();
+  }
+
   document.getElementById('leads-modal').style.display = 'flex';
 }
 function closeLeadsModal() {
@@ -413,70 +460,66 @@ function closeLeadsModal() {
 function nicheKeywords(niche) {
   const n = niche.toLowerCase();
   const sets = [
-    { test: /dental|dentist/,           kws: ['dentist','dental clinic','dental office','family dentistry','cosmetic dentist','orthodontist','pediatric dentist','emergency dentist','teeth whitening','dental care center'] },
-    { test: /chiropract/,               kws: ['chiropractor','chiropractic clinic','chiropractic office','spine specialist','back pain clinic','sports chiropractor'] },
-    { test: /physiother|physical ther/, kws: ['physical therapy','physiotherapy clinic','rehabilitation center','sports rehab','orthopedic rehab'] },
-    { test: /medical|doctor|physician/, kws: ['medical clinic','doctor office','primary care physician','family doctor','urgent care','health clinic','general practitioner'] },
-    { test: /lawyer|attorney|law firm/, kws: ['law firm','attorney office','legal services','law office','legal counsel','personal injury lawyer','family lawyer'] },
-    { test: /restaurant|diner|bistro/,  kws: ['restaurant','diner','bistro','eatery','cafe restaurant','family restaurant','local restaurant'] },
-    { test: /cafe|coffee/,              kws: ['cafe','coffee shop','coffee house','espresso bar','bakery cafe'] },
-    { test: /gym|fitness|crossfit/,     kws: ['gym','fitness center','health club','crossfit box','personal training studio','workout center'] },
-    { test: /salon|hair|barbershop/,    kws: ['hair salon','beauty salon','barber shop','hair stylist','hair studio','men haircut'] },
-    { test: /nail/,                     kws: ['nail salon','nail spa','manicure pedicure','nail studio'] },
-    { test: /spa|massage/,              kws: ['spa','massage therapy','day spa','wellness center','massage center'] },
-    { test: /plumb/,                    kws: ['plumber','plumbing service','plumbing company','drain cleaning','pipe repair'] },
-    { test: /electric/,                 kws: ['electrician','electrical contractor','electrical service','electrical repair','licensed electrician'] },
+    { test: /dental|dentist/,            kws: ['dentist','dental clinic','dental office','family dentistry','cosmetic dentist','orthodontist','pediatric dentist','emergency dentist','teeth whitening','dental care center'] },
+    { test: /chiropract/,                kws: ['chiropractor','chiropractic clinic','chiropractic office','spine specialist','back pain clinic','sports chiropractor'] },
+    { test: /physiother|physical ther/,  kws: ['physical therapy','physiotherapy clinic','rehabilitation center','sports rehab','orthopedic rehab'] },
+    { test: /medical|doctor|physician/,  kws: ['medical clinic','doctor office','primary care physician','family doctor','urgent care','health clinic','general practitioner'] },
+    { test: /lawyer|attorney|law firm/,  kws: ['law firm','attorney office','legal services','law office','legal counsel','personal injury lawyer','family lawyer'] },
+    { test: /restaurant|diner|bistro/,   kws: ['restaurant','diner','bistro','eatery','cafe restaurant','family restaurant','local restaurant'] },
+    { test: /cafe|coffee/,               kws: ['cafe','coffee shop','coffee house','espresso bar','bakery cafe'] },
+    { test: /gym|fitness|crossfit/,      kws: ['gym','fitness center','health club','crossfit box','personal training studio','workout center'] },
+    { test: /salon|hair|barbershop/,     kws: ['hair salon','beauty salon','barber shop','hair stylist','hair studio','men haircut'] },
+    { test: /nail/,                      kws: ['nail salon','nail spa','manicure pedicure','nail studio'] },
+    { test: /spa|massage/,               kws: ['spa','massage therapy','day spa','wellness center','massage center'] },
+    { test: /plumb/,                     kws: ['plumber','plumbing service','plumbing company','drain cleaning','pipe repair'] },
+    { test: /electric/,                  kws: ['electrician','electrical contractor','electrical service','electrical repair','licensed electrician'] },
     { test: /hvac|air condition|heating/,kws: ['HVAC','air conditioning','heating and cooling','AC repair','furnace repair','AC installation'] },
-    { test: /roof/,                     kws: ['roofing company','roof repair','roof replacement','roofing contractor','roofer'] },
-    { test: /real estate|realtor/,      kws: ['real estate agent','realtor','real estate office','property agent','real estate broker'] },
-    { test: /mortgage|loan broker/,     kws: ['mortgage broker','mortgage lender','home loan','mortgage company','refinance'] },
-    { test: /account|bookkeep/,         kws: ['accountant','accounting firm','CPA','bookkeeper','tax accountant','tax preparer'] },
-    { test: /insurance/,                kws: ['insurance agent','insurance broker','insurance company','life insurance','auto insurance'] },
-    { test: /auto repair|mechanic/,     kws: ['auto repair shop','mechanic','car repair','auto service','automotive repair','oil change'] },
-    { test: /car dealer/,               kws: ['car dealership','auto dealer','used car dealer','new car dealer','vehicle sales'] },
-    { test: /hotel|motel|inn/,          kws: ['hotel','motel','inn','bed and breakfast','boutique hotel'] },
-    { test: /landscap|lawn/,            kws: ['landscaping company','lawn care','lawn service','garden service','landscape design'] },
-    { test: /cleaning|janitorial/,      kws: ['cleaning service','house cleaning','commercial cleaning','janitorial service','maid service'] },
-    { test: /vet|veterinar/,            kws: ['veterinarian','animal clinic','pet clinic','animal hospital','vet clinic'] },
-    { test: /optom|eye doctor|vision/,  kws: ['optometrist','eye doctor','vision center','eye clinic','optical store'] },
-    { test: /pharmacy|drugstore/,       kws: ['pharmacy','drugstore','compounding pharmacy','independent pharmacy'] },
-    { test: /tutoring|tutor/,           kws: ['tutoring center','tutor','learning center','academic tutoring','private tutor'] },
-    { test: /daycare|childcare|nursery/,kws: ['daycare','childcare center','nursery','preschool','early learning center'] },
+    { test: /roof/,                      kws: ['roofing company','roof repair','roof replacement','roofing contractor','roofer'] },
+    { test: /real estate|realtor/,       kws: ['real estate agent','realtor','real estate office','property agent','real estate broker'] },
+    { test: /mortgage|loan broker/,      kws: ['mortgage broker','mortgage lender','home loan','mortgage company','refinance'] },
+    { test: /account|bookkeep/,          kws: ['accountant','accounting firm','CPA','bookkeeper','tax accountant','tax preparer'] },
+    { test: /insurance/,                 kws: ['insurance agent','insurance broker','insurance company','life insurance','auto insurance'] },
+    { test: /auto repair|mechanic/,      kws: ['auto repair shop','mechanic','car repair','auto service','automotive repair','oil change'] },
+    { test: /car dealer/,                kws: ['car dealership','auto dealer','used car dealer','new car dealer','vehicle sales'] },
+    { test: /hotel|motel|inn/,           kws: ['hotel','motel','inn','bed and breakfast','boutique hotel'] },
+    { test: /landscap|lawn/,             kws: ['landscaping company','lawn care','lawn service','garden service','landscape design'] },
+    { test: /cleaning|janitorial/,       kws: ['cleaning service','house cleaning','commercial cleaning','janitorial service','maid service'] },
+    { test: /vet|veterinar/,             kws: ['veterinarian','animal clinic','pet clinic','animal hospital','vet clinic'] },
+    { test: /optom|eye doctor|vision/,   kws: ['optometrist','eye doctor','vision center','eye clinic','optical store'] },
+    { test: /pharmacy|drugstore/,        kws: ['pharmacy','drugstore','compounding pharmacy','independent pharmacy'] },
+    { test: /tutoring|tutor/,            kws: ['tutoring center','tutor','learning center','academic tutoring','private tutor'] },
+    { test: /daycare|childcare|nursery/, kws: ['daycare','childcare center','nursery','preschool','early learning center'] },
   ];
-
-  for (const {test, kws} of sets) {
-    if (test.test(n)) return kws;
-  }
-  // Generic fallback — use the niche itself plus common suffixes
+  for (const {test, kws} of sets) if (test.test(n)) return kws;
   const base = niche.trim();
-  return [
-    base,
-    base + ' near me',
-    base + ' service',
-    base + ' company',
-    base + ' office',
-    'best ' + base,
-    'local ' + base,
-    'professional ' + base,
-  ];
+  return [base, base+' near me', base+' service', base+' company', base+' office', 'best '+base, 'local '+base, 'professional '+base];
 }
 
 async function startLeadsSearch() {
-  const apifyKey = cfg.apify();
-  const niche    = document.getElementById('leads-niche').value.trim();
-  const country  = document.getElementById('leads-country').value.trim();
-  const location = document.getElementById('leads-location').value.trim();
-  const count    = Math.max(1, Math.min(500, parseInt(document.getElementById('leads-count').value) || 50));
-  const minRev   = parseInt(document.getElementById('leads-min-reviews').value) || 0;
-  const maxRev   = parseInt(document.getElementById('leads-max-reviews').value) || Infinity;
+  const apifyToken = cfg.apify();
+  const niche      = document.getElementById('leads-niche').value.trim();
+  const country    = document.getElementById('leads-country').value.trim();
+  const location   = document.getElementById('leads-location').value.trim();
+  const count      = Math.max(1, Math.min(500, parseInt(document.getElementById('leads-count').value) || 50));
+  const minRev     = parseInt(document.getElementById('leads-min-reviews').value) || 0;
+  const maxRev     = parseInt(document.getElementById('leads-max-reviews').value) || Infinity;
 
-  if (!apifyKey) { alert('Enter your Apify API key in the config bar at the top'); return; }
+  const warn    = document.getElementById('leads-key-warn');
+  const warnMsg = document.getElementById('leads-key-warn-msg');
+
+  if (!apifyToken) {
+    warn.classList.remove('hidden');
+    warnMsg.textContent = 'Apify token is missing. Enter it in the "Apify Token" field in the config bar at the top of the page.';
+    return;
+  }
   if (!niche)    { alert('Enter a niche'); return; }
   if (!location) { alert('Enter a city or zip code'); return; }
 
+  warn.classList.add('hidden');
   leadsAbort = false;
-  const btn = document.getElementById('btn-leads-search');
-  btn.disabled = true;
+
+  const btn     = document.getElementById('btn-leads-search');
+  btn.disabled  = true;
   document.getElementById('leads-spinner').classList.remove('hidden');
 
   const statusWrap = document.getElementById('leads-status-wrap');
@@ -484,19 +527,21 @@ async function startLeadsSearch() {
   const kwText     = document.getElementById('leads-kw-text');
   const fillBar    = document.getElementById('leads-progress-fill');
   statusWrap.classList.remove('hidden');
+  statusText.style.color = '#94a3b8';
 
-  const setStatus = (msg, kw) => {
+  const setStatus = (msg, kw, isErr) => {
     statusText.textContent = msg;
+    statusText.style.color = isErr ? '#fca5a5' : '#94a3b8';
     if (kw !== undefined) kwText.textContent = kw;
   };
   const setProgress = (n, total) => {
-    fillBar.style.width = `${Math.round(Math.min(n/total, 1)*100)}%`;
+    fillBar.style.width = `${Math.round(Math.min(n / total, 1) * 100)}%`;
   };
 
   const locationStr = location + (country ? `, ${country}` : '');
   const keywords    = nicheKeywords(niche);
-  const found       = new Map(); // website → place object
-  const seenPlaces  = new Set(); // deduplicate by place id or title+address
+  const found       = new Map();
+  const seenPlaces  = new Set();
 
   for (let ki = 0; ki < keywords.length && found.size < count && !leadsAbort; ki++) {
     const kw         = keywords[ki];
@@ -509,69 +554,88 @@ async function startLeadsSearch() {
     let runId, datasetId;
     try {
       const runResp = await fetch(
-        `https://api.apify.com/v2/acts/compass~google-maps-scraper/runs?token=${encodeURIComponent(apifyKey)}`,
+        `https://api.apify.com/v2/acts/compass~google-maps-scraper/runs?token=${encodeURIComponent(apifyToken)}`,
         {
           method:  'POST',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({
-            searchStringsArray:          [searchTerm],
-            maxCrawledPlacesPerSearch:   Math.min(needed + 30, 200),
-            language:                    'en',
-            countryCode:                 country || undefined,
-            skipClosedPlaces:            true,
+            searchStringsArray:        [searchTerm],
+            maxCrawledPlacesPerSearch: Math.min(needed + 30, 200),
+            language:                  'en',
+            countryCode:               country || undefined,
+            skipClosedPlaces:          true,
           }),
         }
       );
+
       if (!runResp.ok) {
-        const err = await runResp.json().catch(() => ({}));
-        setStatus(`Apify error: ${err.error?.message || `HTTP ${runResp.status}`}`, '');
+        let errMsg = `HTTP ${runResp.status}`;
+        try {
+          const errBody = await runResp.json();
+          errMsg = errBody.error?.message || errBody.message || errMsg;
+          if (runResp.status === 401 || runResp.status === 403) {
+            errMsg = `Invalid Apify token (${runResp.status}). Go to apify.com → Settings → Integrations to copy your Personal API token (starts with apify_api_…).`;
+          }
+        } catch(_) {}
+        setStatus(`❌ Apify error: ${errMsg}`, '', true);
         break;
       }
+
       const runData = await runResp.json();
       runId     = runData.data?.id;
       datasetId = runData.data?.defaultDatasetId;
-      if (!runId) { setStatus('Apify did not return a run ID', ''); break; }
+      if (!runId) { setStatus('❌ Apify did not return a run ID', '', true); break; }
+
     } catch(e) {
-      setStatus(`Network error: ${e.message}`, '');
+      setStatus(`❌ Network error: ${e.message}`, '', true);
       break;
     }
 
     // Poll until run finishes
-    let status = 'READY';
-    while ((status === 'READY' || status === 'RUNNING') && !leadsAbort) {
+    let runStatus = 'READY';
+    let pollFails = 0;
+    while ((runStatus === 'READY' || runStatus === 'RUNNING') && !leadsAbort) {
       await new Promise(r => setTimeout(r, 3500));
       try {
-        const sr   = await fetch(`https://api.apify.com/v2/actor-runs/${runId}?token=${encodeURIComponent(apifyKey)}`);
-        const sd   = await sr.json();
-        status     = sd.data?.status || 'FAILED';
-        datasetId  = sd.data?.defaultDatasetId || datasetId;
-        setStatus(`Keyword "${kw}" — ${status.toLowerCase()}… (${found.size}/${count} found)`, kwText.textContent);
+        const sr  = await fetch(`https://api.apify.com/v2/actor-runs/${runId}?token=${encodeURIComponent(apifyToken)}`);
+        const sd  = await sr.json();
+        runStatus = sd.data?.status || 'FAILED';
+        datasetId = sd.data?.defaultDatasetId || datasetId;
+        setStatus(`"${kw}" — ${runStatus.toLowerCase()}… (${found.size}/${count} found)`, kwText.textContent);
+        pollFails = 0;
       } catch(_) {
-        // transient network hiccup — keep polling
+        if (++pollFails > 5) { runStatus = 'FAILED'; }
       }
     }
 
     if (leadsAbort) break;
-    if (status !== 'SUCCEEDED') continue;
+
+    if (runStatus !== 'SUCCEEDED') {
+      setStatus(`Run ended with status: ${runStatus} — trying next keyword…`, kwText.textContent);
+      continue;
+    }
 
     // Fetch dataset items
     try {
       const itemsResp = await fetch(
-        `https://api.apify.com/v2/datasets/${datasetId}/items?token=${encodeURIComponent(apifyKey)}&limit=300&clean=true`
+        `https://api.apify.com/v2/datasets/${datasetId}/items?token=${encodeURIComponent(apifyToken)}&limit=300&clean=true`
       );
+      if (!itemsResp.ok) {
+        setStatus(`Dataset fetch failed (${itemsResp.status}) — trying next keyword…`, kwText.textContent);
+        continue;
+      }
       const items = await itemsResp.json();
+      const list  = Array.isArray(items) ? items : (items.items || []);
 
-      for (const item of (Array.isArray(items) ? items : [])) {
+      for (const item of list) {
         if (found.size >= count) break;
         const website = item.website || item.url;
         if (!website) continue;
 
-        // Review filter
         const reviews = item.reviewsCount ?? item.totalReviews ?? 0;
         if (reviews < minRev) continue;
         if (maxRev !== Infinity && reviews > maxRev) continue;
 
-        // Deduplicate
         const dedupeKey = item.placeId || `${item.title}|${item.address}`;
         if (seenPlaces.has(dedupeKey)) continue;
         seenPlaces.add(dedupeKey);
@@ -583,7 +647,7 @@ async function startLeadsSearch() {
           title:    item.title || item.name,
           address:  item.address,
           phone:    item.phone || item.phoneUnformatted,
-          reviews:  reviews,
+          reviews,
           rating:   item.totalScore,
           category: item.categoryName || item.categories?.[0],
         });
@@ -592,7 +656,7 @@ async function startLeadsSearch() {
         setStatus(`Found ${found.size}/${count} leads…`, kwText.textContent);
       }
     } catch(e) {
-      // dataset fetch failed — continue with next keyword
+      // dataset fetch threw — continue with next keyword
     }
   }
 
@@ -600,17 +664,15 @@ async function startLeadsSearch() {
   document.getElementById('leads-spinner').classList.add('hidden');
 
   if (!found.size) {
-    setStatus('No leads found. Try a different niche, location, or review range.', '');
+    setStatus('⚠️ No leads found. Check: is your Apify token correct? Does the niche exist in this location? Try relaxing the review range.', '', true);
     setProgress(0, 1);
     return;
   }
 
-  setStatus(`✓ ${found.size} lead${found.size !== 1 ? 's' : ''} found! Adding to table…`, '');
+  setStatus(`✓ ${found.size} lead${found.size !== 1 ? 's' : ''} found! Loading into table…`, '');
   setProgress(found.size, count);
 
-  // Merge into urls / results
   const existingSet = new Set(urls.map(u => u.url));
-  let added = 0;
   for (const [website, info] of found) {
     if (existingSet.has(website)) continue;
     urls.push({
@@ -622,17 +684,15 @@ async function startLeadsSearch() {
       phone:    info.phone,
       category: info.category,
     });
-    added++;
   }
 
   document.getElementById('drop-zone').classList.add('hidden');
   document.getElementById('main-section').classList.remove('hidden');
   document.getElementById('url-heading').textContent    = `${urls.length} URL${urls.length !== 1 ? 's' : ''} found`;
-  document.getElementById('url-subheading').textContent = `${added} new leads added from Google Maps via Apify`;
+  document.getElementById('url-subheading').textContent = `${found.size} leads added from Google Maps via Apify`;
 
   renderTable();
   updateStats();
-
   setTimeout(closeLeadsModal, 800);
 }
 
@@ -653,7 +713,6 @@ function rowHtml(idx) {
     error:   `<span class="text-red-400">Error<br><span class="text-xs text-red-300">${esc(r.error||'').slice(0,50)}</span></span>`,
   }[st] || `<span class="text-slate-400">${st}</span>`;
 
-  // Extra info from Apify (only available for leads rows)
   const metaLine = (u.address || u.phone || u.reviews != null)
     ? `<div class="text-slate-500 text-xs mt-0.5">${[
         u.reviews != null ? `★ ${u.rating?.toFixed(1) ?? '?'} (${u.reviews})` : '',
@@ -758,7 +817,7 @@ function actionsCell(idx) {
   }
 
   if (h && h.found) {
-    const siteUrl = h.company_website || ('https://' + h.domain);
+    const siteUrl    = h.company_website || ('https://' + h.domain);
     const sameDomain = siteUrl === urls[idx].url || siteUrl === urls[idx].url + '/';
     if (!sameDomain) {
       const done = results[siteUrl] && results[siteUrl].status === 'done';
@@ -784,7 +843,7 @@ function updateStats() {
   document.getElementById('st-cro').textContent   = vals.filter(r => r.cro_audit && !r.cro_audit.error).length;
 }
 
-// ── Run one URL ───────────────────────────────────────────────────────────────────────────────
+// ── Run one URL ──────────────────────────────────────────────────────────────────────────────
 async function runOne(idx) {
   const u    = urls[idx];
   const base = cfg.api();
@@ -814,7 +873,7 @@ async function runOne(idx) {
   }
 }
 
-// ── Run all ───────────────────────────────────────────────────────────────────────────────
+// ── Run all ──────────────────────────────────────────────────────────────────────────────
 async function runAll() {
   if (running) return;
   const base = cfg.api();
@@ -1064,9 +1123,9 @@ function showCroModal(idx) {
     ? issues.map(issue => {
         const sev = issue.severity || 'low';
         const dec = issue.decision || 'confirmed';
-        const decBadge = dec === 'suppressed'          ? '<span class="badge badge-slate">suppressed</span>'
+        const decBadge = dec === 'suppressed'            ? '<span class="badge badge-slate">suppressed</span>'
                        : dec === 'verification_required' ? '<span class="badge badge-yellow">verify</span>'
-                       : '<span class="badge badge-green">confirmed</span>';
+                       :                                   '<span class="badge badge-green">confirmed</span>';
         return `<div class="issue-card ${sev}">
           <div class="flex gap-2 items-start flex-wrap mb-1">
             <span class="badge ${sev==='high'?'badge-red':sev==='medium'?'badge-yellow':'badge-slate'}">${sev.toUpperCase()}</span>
