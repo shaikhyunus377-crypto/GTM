@@ -197,7 +197,7 @@ let hunterRunning= new Set();
 
 // ── Config ────────────────────────────────────────────────────────────────────
 const cfg = {
-  api:      () => (document.getElementById('api-url').value || '').trim().replace(/\/$/, ''),
+  api:      () => { let v = (document.getElementById('api-url').value || '').trim().replace(/\/$/, ''); if (v && !v.startsWith('http')) v = 'https://' + v; return v; },
   hunter:   () => document.getElementById('hunter-key').value.trim(),
   industry: () => document.getElementById('industry').value,
   workers:  () => parseInt(document.getElementById('workers').value) || 2,
