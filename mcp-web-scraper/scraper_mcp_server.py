@@ -12,6 +12,8 @@ Deploy to Railway. Required env vars:
   HUNTER_API_KEY      (optional)
 """
 
+from __future__ import annotations
+
 import os
 import sys
 import json
