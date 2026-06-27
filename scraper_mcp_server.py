@@ -116,10 +116,24 @@ def build_dom_states(html: str, url: str, live_elements: list) -> dict:
     }
 
 
-def _run_cro(html: str, dom_elements: list, industry: str, url: str) -> dict:
+try:
+    from cro_bots.screenshot_utils import attach_crops
+    CROPS_AVAILABLE = True
+except ImportError:
+    CROPS_AVAILABLE = False
+
+    def attach_crops(issues, screenshot_b64):  # type: ignore
+        pass
+
+
+def _run_cro(html: str, dom_elements: list, industry: str, url: str,
+             screenshot_b64: str | None = None) -> dict:
     try:
         report = run_audit(html, dom_elements, industry=industry, url=url)
-        return run_wolf(report, html, dom_elements, industry=industry)
+        wolf   = run_wolf(report, html, dom_elements, industry=industry)
+        if screenshot_b64 and wolf.get("client_report"):
+            attach_crops(wolf["client_report"], screenshot_b64)
+        return wolf
     except Exception as exc:
         log.warning("CRO error for %s: %s", url, exc, exc_info=True)
         return {"error": str(exc)}
@@ -190,10 +204,13 @@ def scrape_sync(url: str, run_cro: bool = True, industry: str = "all") -> dict:
     dom = build_dom_states(html, url, live_elements)
     result["dom_states"] = dom
 
-    # Step 4 — CRO audit
+    # Step 4 — CRO audit (pass screenshot for per-issue crops)
     if run_cro and CRO_AVAILABLE:
         log.info("Running CRO audit: %s", url)
-        result["cro_audit"] = _run_cro(html, dom["elements"], industry, url)
+        result["cro_audit"] = _run_cro(
+            html, dom["elements"], industry, url,
+            screenshot_b64=result.get("screenshot_b64"),
+        )
 
     return result
 

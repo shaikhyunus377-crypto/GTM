@@ -549,34 +549,109 @@ def eval_mobile_tap_targets(issue: dict, ev: dict):
 
 
 # ── AI finding evaluators ────────────────────────────────────────────────────
-# These pass through bot findings but enforce calibrated confidence ceilings
-# and downgrade to verification_required if evidence is thin.
+# Wolf is the FINAL authority on AI findings.
+# Each evaluator cross-validates the AI claim against deterministic evidence.
+# If Wolf cannot independently confirm the claim, it MUST downgrade — never
+# leave a confirmed+thin-evidence contradiction in the output.
 
 _AI_CONFIDENCE_CEILING = {
     "hero_primary_cta_missing":  80,
     "hero_value_proposition":    85,
     "hero_action_clarity":       65,
     "offer_clarity":             80,
-    "social_proof_near_cta":     75,
+    "social_proof_near_cta":     60,  # layout-dependent, cannot verify without spatial data
 }
 
-def eval_ai_finding(issue: dict, ev: dict):
-    """Wolf pass-through for AI findings: enforce ceiling, thin-evidence downgrade."""
-    finding_id = issue.get("id", "")
-    ceiling    = _AI_CONFIDENCE_CEILING.get(finding_id, 75)
 
-    # Clamp confidence to ceiling
-    score = min(issue.get("confidence_score", 70), ceiling)
+def _ai_downgrade(issue: dict, score: int, reason: str) -> None:
+    """Force verification_required, bypassing authority lock. Never confirms."""
+    issue["decision"]         = "verification_required"
     issue["confidence_score"] = score
+    issue.setdefault("decision_reasons", []).append(f"wolf: {reason}")
 
-    # If evidence array is all short strings, not enough to stand alone
+
+def _ai_suppress(issue: dict, reason: str) -> None:
+    """Suppress AI finding when deterministic data contradicts it."""
+    issue["decision"]         = "suppressed"
+    issue["confidence_score"] = 0
+    issue.setdefault("decision_reasons", []).append(f"wolf_suppress: {reason}")
+
+
+def _evidence_ok(issue: dict) -> bool:
+    """True if AI provided substantive evidence (not just conclusions restated)."""
     evidence = issue.get("evidence", [])
-    evidence_chars = sum(len(e) for e in evidence)
-    if evidence_chars < 60:
-        flag_verify(issue, score, "ai_evidence_too_thin_to_confirm", [])
-        return
+    return sum(len(e) for e in evidence) >= 60
 
-    confirm(issue, score, f"ai_confirmed_{finding_id}", [])
+
+def eval_ai_hero_primary_cta(issue: dict, ev: dict):
+    """Cross-validate with fold_ev: if CTAs exist above fold, suppress."""
+    if ev.get("above_fold_count", 0) > 0:
+        _ai_suppress(issue, f"fold_ev_found_{ev['above_fold_count']}_ctas_above_fold")
+        return
+    if not _evidence_ok(issue):
+        _ai_downgrade(issue, 55, "ai_evidence_too_thin")
+        return
+    ceiling = _AI_CONFIDENCE_CEILING["hero_primary_cta_missing"]
+    score   = min(issue.get("confidence_score", 70), ceiling)
+    confirm(issue, score, "ai_dom_confirms_no_booking_cta_above_fold", [])
+
+
+def eval_ai_hero_value_proposition(issue: dict, ev: dict):
+    """
+    Confirm if AI cited actual hero headline AND evidence passes length check.
+    Downgrade otherwise — value prop weakness is the most subjective finding.
+    """
+    if not _evidence_ok(issue):
+        _ai_downgrade(issue, 55, "ai_evidence_too_thin")
+        return
+    ceiling = _AI_CONFIDENCE_CEILING["hero_value_proposition"]
+    score   = min(issue.get("confidence_score", 70), ceiling)
+    confirm(issue, score, "ai_confirmed_hero_value_proposition", [])
+
+
+def eval_ai_hero_action_clarity(issue: dict, ev: dict):
+    """
+    Confirm only if fold_ev shows CTAs exist but none are booking-intent.
+    If fold is empty, this is redundant with hero_primary_cta_missing.
+    """
+    above_fold  = ev.get("above_fold_count", 0)
+    total_ctas  = ev.get("total_booking_ctas", 0)
+
+    if above_fold == 0 and total_ctas == 0:
+        # No CTAs at all — this is a different problem, not action clarity
+        _ai_suppress(issue, "no_fold_ctas_found_redundant_with_hero_primary_cta_missing")
+        return
+    if not _evidence_ok(issue):
+        _ai_downgrade(issue, 50, "ai_evidence_too_thin")
+        return
+    ceiling = _AI_CONFIDENCE_CEILING["hero_action_clarity"]
+    score   = min(issue.get("confidence_score", 60), ceiling)
+    confirm(issue, score, "ai_confirmed_hero_action_clarity", [])
+
+
+def eval_ai_offer_clarity(issue: dict, ev: dict):
+    if not _evidence_ok(issue):
+        _ai_downgrade(issue, 50, "ai_evidence_too_thin")
+        return
+    ceiling = _AI_CONFIDENCE_CEILING["offer_clarity"]
+    score   = min(issue.get("confidence_score", 70), ceiling)
+    confirm(issue, score, "ai_confirmed_offer_clarity", [])
+
+
+def eval_ai_social_proof_near_cta(issue: dict, ev: dict):
+    """
+    Cannot verify spatial proximity of social proof to CTA without
+    pixel-level layout data. Always downgrade to verification_required.
+    If social proof is completely absent, suppress (social_proof bot covers it).
+    """
+    if not ev.get("has_any_signal", False):
+        _ai_suppress(issue, "no_social_proof_found_covered_by_social_proof_bot")
+        return
+    # We know social proof exists but can't confirm it's spatially distant from CTA
+    _ai_downgrade(
+        issue, 50,
+        "cannot_verify_spatial_proximity_without_screenshot_coordinates"
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -663,12 +738,12 @@ EVALUATOR_MAP = {
     "social_proof":      (eval_social_proof,      "social_ev"),
     "trust_signals":     (eval_trust_signals,     "trust_ev"),
     "mobile_tap_targets":(eval_mobile_tap_targets,"tap_ev"),
-    # AI atomic findings — each evaluated independently with confidence ceiling
-    "hero_primary_cta_missing":  (eval_ai_finding, "fold_ev"),
-    "hero_value_proposition":    (eval_ai_finding, "fold_ev"),
-    "hero_action_clarity":       (eval_ai_finding, "fold_ev"),
-    "offer_clarity":             (eval_ai_finding, "fold_ev"),
-    "social_proof_near_cta":     (eval_ai_finding, "social_ev"),
+    # AI atomic findings — Wolf cross-validates each one independently
+    "hero_primary_cta_missing":  (eval_ai_hero_primary_cta,       "fold_ev"),
+    "hero_value_proposition":    (eval_ai_hero_value_proposition,  "fold_ev"),
+    "hero_action_clarity":       (eval_ai_hero_action_clarity,     "fold_ev"),
+    "offer_clarity":             (eval_ai_offer_clarity,           "fold_ev"),
+    "social_proof_near_cta":     (eval_ai_social_proof_near_cta,   "social_ev"),
 }
 
 

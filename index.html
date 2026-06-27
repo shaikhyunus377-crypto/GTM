@@ -623,6 +623,7 @@ function showCroModal(idx) {
       </div>
       ${(issue.findings||[]).map(f => `<div class="text-xs text-slate-300 mb-1">• ${f}</div>`).join('')}
       ${(issue.evidence||[]).length ? `<div class="text-xs text-slate-500 mt-1 italic">${(issue.evidence||[]).map(e=>`↳ ${e}`).join('<br>')}</div>` : ''}
+      ${issue.screenshot_crop ? `<div class="mt-2 rounded overflow-hidden border border-slate-700"><img src="data:image/png;base64,${issue.screenshot_crop}" class="w-full" alt="Page region for this issue" loading="lazy"/></div>` : ''}
       ${issue.fix ? `<div class="text-xs text-indigo-300 mt-1 border-t border-slate-700 pt-1"><strong>Fix:</strong> ${issue.fix}</div>` : ''}
       ${issue.revenue_signal ? `<div class="text-xs text-green-400 mt-1">${issue.revenue_signal}</div>` : ''}
     </div>`;
