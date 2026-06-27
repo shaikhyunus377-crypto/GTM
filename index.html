@@ -336,7 +336,7 @@ function saveConfig() {
 function loadConfig() {
   document.getElementById('api-url').value    = localStorage.getItem('gtm_api')      || '';
   document.getElementById('hunter-key').value = localStorage.getItem('gtm_hunter')   || '';
-  document.getElementById('apify-key').value  = localStorage.getItem('gtm_apify')    || '';
+  document.getElementById('apify-key').value  = extractApifyToken(localStorage.getItem('gtm_apify') || '');
   document.getElementById('industry').value   = localStorage.getItem('gtm_industry') || 'all';
   document.getElementById('workers').value    = localStorage.getItem('gtm_workers')  || '2';
 }
@@ -581,7 +581,7 @@ async function startLeadsSearch() {
   }
 
   // ─ PHASE 1: Broad city search to discover zip codes ——————————————————
-  setStatus(`🔍 Phase 1: Discovering zip codes in ${city}…`, `Using niche “${keywords[0]}” for discovery`);
+  setStatus(`🔍 Phase 1: Discovering zip codes in ${city}…`, `Using niche "${keywords[0]}" for discovery`);
   setBar(0, count);
 
   const discoveredZips = new Map(); // zip → search count (how many times we've searched it)
