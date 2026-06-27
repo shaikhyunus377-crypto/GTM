@@ -45,6 +45,7 @@
   .leads-progress-bar{height:6px;background:#334155;border-radius:3px;overflow:hidden;margin-top:.5rem}
   .leads-progress-fill{height:100%;background:#0d9488;border-radius:3px;transition:width .3s}
   .hint{font-size:.68rem;color:#64748b;margin-top:.2rem}
+  .phase-tag{display:inline-block;font-size:.65rem;font-weight:700;padding:.1rem .35rem;border-radius:.2rem;background:#1e3a5f;color:#7dd3fc;margin-right:.3rem}
 </style>
 </head>
 <body class="min-h-screen">
@@ -111,7 +112,6 @@
 
 <!-- Main section -->
 <div id="main-section" class="hidden px-6 pb-6">
-
   <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
     <div>
       <div class="text-white font-bold text-lg" id="url-heading">0 URLs found</div>
@@ -161,13 +161,7 @@
         <thead>
           <tr>
             <th style="width:32px"><input type="checkbox" id="check-all" onchange="toggleAll(this)"/></th>
-            <th>#</th>
-            <th>URL</th>
-            <th>Status</th>
-            <th>Decision Maker</th>
-            <th>Email</th>
-            <th>CRO</th>
-            <th>Actions</th>
+            <th>#</th><th>URL</th><th>Status</th><th>Decision Maker</th><th>Email</th><th>CRO</th><th>Actions</th>
           </tr>
         </thead>
         <tbody id="table-body"></tbody>
@@ -184,7 +178,7 @@
       <button class="text-slate-400 hover:text-white text-xl" onclick="closeLeadsModal()">✕</button>
     </div>
 
-    <!-- Token warning (shown when key looks wrong) -->
+    <!-- Token warning -->
     <div id="leads-key-warn" class="hidden mb-3 p-3 rounded" style="background:#451a03;border:1px solid #92400e">
       <div class="text-yellow-300 text-xs font-semibold mb-1">⚠️ Apify Token issue</div>
       <div class="text-yellow-200 text-xs" id="leads-key-warn-msg"></div>
@@ -193,8 +187,7 @@
     <div class="grid grid-cols-2 gap-3 mb-3">
       <div>
         <div class="text-xs text-slate-400 mb-1">Niche *</div>
-        <input id="leads-niche" type="text" placeholder="e.g. dental clinic" class="w-full"
-          list="niche-suggestions"/>
+        <input id="leads-niche" type="text" placeholder="e.g. dental clinic" class="w-full" list="niche-suggestions"/>
         <datalist id="niche-suggestions">
           <option value="dental clinic"/><option value="dentist"/>
           <option value="medical clinic"/><option value="doctor office"/>
@@ -230,8 +223,9 @@
         </select>
       </div>
       <div>
-        <div class="text-xs text-slate-400 mb-1">City or Zip Code *</div>
-        <input id="leads-location" type="text" placeholder="e.g. New York or 10001" class="w-full"/>
+        <div class="text-xs text-slate-400 mb-1">City *</div>
+        <input id="leads-city" type="text" placeholder="e.g. New York" class="w-full"/>
+        <div class="hint">Zip codes auto-discovered from the city</div>
       </div>
       <div>
         <div class="text-xs text-slate-400 mb-1">Lead Count *</div>
@@ -253,7 +247,7 @@
       <div class="leads-progress-bar">
         <div class="leads-progress-fill" id="leads-progress-fill" style="width:0%"></div>
       </div>
-      <div class="text-xs text-slate-500 mt-1" id="leads-kw-text"></div>
+      <div class="text-xs text-slate-500 mt-1" id="leads-detail-text"></div>
     </div>
 
     <div class="flex gap-2 justify-end">
@@ -308,41 +302,30 @@ let leadsAbort    = false;
 
 // ── Config ──────────────────────────────────────────────────────────────────────────────────
 const cfg = {
-  api:      () => { let v = (document.getElementById('api-url').value || '').trim().replace(/\/$/, ''); if (v && !v.startsWith('http')) v = 'https://' + v; return v; },
+  api:      () => { let v = (document.getElementById('api-url').value||'').trim().replace(/\/$/, ''); if (v && !v.startsWith('http')) v='https://'+v; return v; },
   hunter:   () => document.getElementById('hunter-key').value.trim(),
   apify:    () => extractApifyToken(document.getElementById('apify-key').value.trim()),
   industry: () => document.getElementById('industry').value,
-  workers:  () => parseInt(document.getElementById('workers').value) || 2,
+  workers:  () => parseInt(document.getElementById('workers').value)||2,
 };
 
-// If the user pasted a full Apify URL, extract the token from it
 function extractApifyToken(raw) {
   if (!raw) return '';
-  // Already looks like a token
   if (/^apify_api_/i.test(raw) || (!raw.includes('http') && raw.length > 10)) return raw;
   try {
     const u = new URL(raw);
-    // ?token=apify_api_...
     const t = u.searchParams.get('token');
     if (t) return t;
-    // Path segments that look like tokens
-    for (const seg of u.pathname.split('/')) {
-      if (/^apify_api_/i.test(seg) || seg.length > 30) return seg;
-    }
+    for (const seg of u.pathname.split('/')) if (/^apify_api_/i.test(seg) || seg.length > 30) return seg;
   } catch(_) {}
-  return raw; // return as-is and let Apify reject it with a proper error
+  return raw;
 }
-
 function sanitizeApifyKey(input) {
   const raw = input.value.trim();
   if (!raw) return;
   const token = extractApifyToken(raw);
-  if (token !== raw) {
-    input.value = token;
-    saveConfig();
-  }
+  if (token !== raw) { input.value = token; saveConfig(); }
 }
-
 function saveConfig() {
   localStorage.setItem('gtm_api',      document.getElementById('api-url').value);
   localStorage.setItem('gtm_hunter',   document.getElementById('hunter-key').value);
@@ -360,374 +343,371 @@ function loadConfig() {
 
 // ── API ping ──────────────────────────────────────────────────────────────────────────────────
 async function pingApi() {
-  const base = cfg.api();
-  const el   = document.getElementById('api-status');
-  if (!base) { el.textContent = 'Set API URL'; el.className = 'text-xs text-red-400'; return; }
-  el.textContent = 'Pinging…'; el.className = 'text-xs text-slate-400';
+  const base = cfg.api(), el = document.getElementById('api-status');
+  if (!base) { el.textContent='Set API URL'; el.className='text-xs text-red-400'; return; }
+  el.textContent='Pinging…'; el.className='text-xs text-slate-400';
   try {
-    const r = await fetch(base + '/', {signal: AbortSignal.timeout(8000)});
+    const r = await fetch(base+'/', {signal:AbortSignal.timeout(8000)});
     const d = await r.json();
-    el.textContent = d.status === 'ok'
-      ? `API online — v${d.server || '?'} ${d.cro_available ? '✓ CRO' : ''} ${d.hunter ? '✓ Hunter' : ''}`
-      : 'API error';
-    el.className = d.status === 'ok' ? 'text-xs text-green-400' : 'text-xs text-red-400';
-  } catch(e) {
-    el.textContent = 'API unreachable'; el.className = 'text-xs text-red-400';
-  }
+    el.textContent = d.status==='ok' ? `API online — v${d.server||'?'} ${d.cro_available?'✓ CRO':''} ${d.hunter?'✓ Hunter':''}` : 'API error';
+    el.className = d.status==='ok' ? 'text-xs text-green-400' : 'text-xs text-red-400';
+  } catch(e) { el.textContent='API unreachable'; el.className='text-xs text-red-400'; }
 }
 
 // ── File handling ────────────────────────────────────────────────────────────────────────────────
 function handleDrop(e) {
-  e.preventDefault();
-  document.getElementById('drop-zone').classList.remove('over');
+  e.preventDefault(); document.getElementById('drop-zone').classList.remove('over');
   if (e.dataTransfer.files[0]) loadFromFile(e.dataTransfer.files[0]);
 }
-function handleFile(input) {
-  if (input.files[0]) loadFromFile(input.files[0]);
-  input.value = '';
-}
-
+function handleFile(input) { if (input.files[0]) loadFromFile(input.files[0]); input.value=''; }
 function loadFromFile(file) {
   const reader = new FileReader();
   reader.onload = e => {
-    const wb   = XLSX.read(e.target.result, {type: 'array'});
-    const ws   = wb.Sheets[wb.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json(ws, {header: 1, defval: ''});
-    parseRows(rows, file.name);
+    const wb = XLSX.read(e.target.result,{type:'array'});
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    parseRows(XLSX.utils.sheet_to_json(ws,{header:1,defval:''}), file.name);
   };
   reader.readAsArrayBuffer(file);
 }
-
 function parseRows(rows, filename) {
-  const seen    = new Set();
-  const newUrls = [];
-  for (const row of rows) {
-    for (const cell of row) {
-      const v = String(cell || '').trim();
-      if (!v || v.length > 300) continue;
-      let url = '';
-      if (v.startsWith('http://') || v.startsWith('https://')) {
-        url = v;
-      } else if (/^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z]{2,})+$/.test(v)) {
-        url = 'https://' + v;
-      }
-      if (url && !seen.has(url)) {
-        seen.add(url);
-        newUrls.push({url, name: url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0]});
-      }
-    }
+  const seen=new Set(), newUrls=[];
+  for (const row of rows) for (const cell of row) {
+    const v=String(cell||'').trim();
+    if (!v||v.length>300) continue;
+    let url='';
+    if (v.startsWith('http://')||v.startsWith('https://')) url=v;
+    else if (/^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z]{2,})+$/.test(v)) url='https://'+v;
+    if (url && !seen.has(url)) { seen.add(url); newUrls.push({url, name:url.replace(/^https?:\/\/(www\.)?/,'').split('/')[0]}); }
   }
   if (!newUrls.length) { alert('No URLs or domains found in file'); return; }
-  urls    = newUrls;
-  results = {};
+  urls=newUrls; results={};
   document.getElementById('drop-zone').classList.add('hidden');
   document.getElementById('main-section').classList.remove('hidden');
-  document.getElementById('url-heading').textContent    = `${urls.length} URL${urls.length !== 1 ? 's' : ''} found`;
-  document.getElementById('url-subheading').textContent = `From: ${filename}`;
-  renderTable();
-  updateStats();
+  document.getElementById('url-heading').textContent=`${urls.length} URL${urls.length!==1?'s':''} found`;
+  document.getElementById('url-subheading').textContent=`From: ${filename}`;
+  renderTable(); updateStats();
 }
 
-// ── Get Leads (Apify Google Maps) ──────────────────────────────────────────────────────────
+// ── Get Leads ──────────────────────────────────────────────────────────────────────────────────
 function openLeadsModal() {
-  leadsAbort = false;
+  leadsAbort=false;
   document.getElementById('leads-status-wrap').classList.add('hidden');
   document.getElementById('leads-key-warn').classList.add('hidden');
   document.getElementById('leads-spinner').classList.add('hidden');
-  document.getElementById('btn-leads-search').disabled = false;
-
-  // Pre-flight token check
-  const raw = document.getElementById('apify-key').value.trim();
-  const tok = extractApifyToken(raw);
-  const warn = document.getElementById('leads-key-warn');
-  const warnMsg = document.getElementById('leads-key-warn-msg');
+  document.getElementById('btn-leads-search').disabled=false;
+  const raw=document.getElementById('apify-key').value.trim();
+  const tok=extractApifyToken(raw);
   if (!tok) {
-    warn.classList.remove('hidden');
-    warnMsg.textContent = 'No Apify token found. Enter your token (starts with apify_api_…) in the "Apify Token" field in the config bar above, then re-open this modal.';
-  } else if (raw !== tok) {
-    // Auto-fixed — update the field
-    document.getElementById('apify-key').value = tok;
-    saveConfig();
-  }
-
-  document.getElementById('leads-modal').style.display = 'flex';
+    document.getElementById('leads-key-warn').classList.remove('hidden');
+    document.getElementById('leads-key-warn-msg').textContent='No Apify token found. Enter your Personal API token (starts with apify_api_…) in the "Apify Token" field in the config bar above.';
+  } else if (raw!==tok) { document.getElementById('apify-key').value=tok; saveConfig(); }
+  document.getElementById('leads-modal').style.display='flex';
 }
-function closeLeadsModal() {
-  leadsAbort = true;
-  document.getElementById('leads-modal').style.display = 'none';
-}
+function closeLeadsModal() { leadsAbort=true; document.getElementById('leads-modal').style.display='none'; }
 
 function nicheKeywords(niche) {
-  const n = niche.toLowerCase();
-  const sets = [
-    { test: /dental|dentist/,            kws: ['dentist','dental clinic','dental office','family dentistry','cosmetic dentist','orthodontist','pediatric dentist','emergency dentist','teeth whitening','dental care center'] },
-    { test: /chiropract/,                kws: ['chiropractor','chiropractic clinic','chiropractic office','spine specialist','back pain clinic','sports chiropractor'] },
-    { test: /physiother|physical ther/,  kws: ['physical therapy','physiotherapy clinic','rehabilitation center','sports rehab','orthopedic rehab'] },
-    { test: /medical|doctor|physician/,  kws: ['medical clinic','doctor office','primary care physician','family doctor','urgent care','health clinic','general practitioner'] },
-    { test: /lawyer|attorney|law firm/,  kws: ['law firm','attorney office','legal services','law office','legal counsel','personal injury lawyer','family lawyer'] },
-    { test: /restaurant|diner|bistro/,   kws: ['restaurant','diner','bistro','eatery','cafe restaurant','family restaurant','local restaurant'] },
-    { test: /cafe|coffee/,               kws: ['cafe','coffee shop','coffee house','espresso bar','bakery cafe'] },
-    { test: /gym|fitness|crossfit/,      kws: ['gym','fitness center','health club','crossfit box','personal training studio','workout center'] },
-    { test: /salon|hair|barbershop/,     kws: ['hair salon','beauty salon','barber shop','hair stylist','hair studio','men haircut'] },
-    { test: /nail/,                      kws: ['nail salon','nail spa','manicure pedicure','nail studio'] },
-    { test: /spa|massage/,               kws: ['spa','massage therapy','day spa','wellness center','massage center'] },
-    { test: /plumb/,                     kws: ['plumber','plumbing service','plumbing company','drain cleaning','pipe repair'] },
-    { test: /electric/,                  kws: ['electrician','electrical contractor','electrical service','electrical repair','licensed electrician'] },
-    { test: /hvac|air condition|heating/,kws: ['HVAC','air conditioning','heating and cooling','AC repair','furnace repair','AC installation'] },
-    { test: /roof/,                      kws: ['roofing company','roof repair','roof replacement','roofing contractor','roofer'] },
-    { test: /real estate|realtor/,       kws: ['real estate agent','realtor','real estate office','property agent','real estate broker'] },
-    { test: /mortgage|loan broker/,      kws: ['mortgage broker','mortgage lender','home loan','mortgage company','refinance'] },
-    { test: /account|bookkeep/,          kws: ['accountant','accounting firm','CPA','bookkeeper','tax accountant','tax preparer'] },
-    { test: /insurance/,                 kws: ['insurance agent','insurance broker','insurance company','life insurance','auto insurance'] },
-    { test: /auto repair|mechanic/,      kws: ['auto repair shop','mechanic','car repair','auto service','automotive repair','oil change'] },
-    { test: /car dealer/,                kws: ['car dealership','auto dealer','used car dealer','new car dealer','vehicle sales'] },
-    { test: /hotel|motel|inn/,           kws: ['hotel','motel','inn','bed and breakfast','boutique hotel'] },
-    { test: /landscap|lawn/,             kws: ['landscaping company','lawn care','lawn service','garden service','landscape design'] },
-    { test: /cleaning|janitorial/,       kws: ['cleaning service','house cleaning','commercial cleaning','janitorial service','maid service'] },
-    { test: /vet|veterinar/,             kws: ['veterinarian','animal clinic','pet clinic','animal hospital','vet clinic'] },
-    { test: /optom|eye doctor|vision/,   kws: ['optometrist','eye doctor','vision center','eye clinic','optical store'] },
-    { test: /pharmacy|drugstore/,        kws: ['pharmacy','drugstore','compounding pharmacy','independent pharmacy'] },
-    { test: /tutoring|tutor/,            kws: ['tutoring center','tutor','learning center','academic tutoring','private tutor'] },
-    { test: /daycare|childcare|nursery/, kws: ['daycare','childcare center','nursery','preschool','early learning center'] },
+  const n=niche.toLowerCase();
+  const sets=[
+    {test:/dental|dentist/,           kws:['dentist','dental clinic','dental office','family dentistry','cosmetic dentist','orthodontist','pediatric dentist','emergency dentist','teeth whitening','dental care center']},
+    {test:/chiropract/,               kws:['chiropractor','chiropractic clinic','chiropractic office','spine specialist','back pain clinic','sports chiropractor']},
+    {test:/physiother|physical ther/, kws:['physical therapy','physiotherapy clinic','rehabilitation center','sports rehab','orthopedic rehab']},
+    {test:/medical|doctor|physician/, kws:['medical clinic','doctor office','primary care physician','family doctor','urgent care','health clinic','general practitioner']},
+    {test:/lawyer|attorney|law firm/, kws:['law firm','attorney office','legal services','law office','personal injury lawyer','family lawyer','criminal defense attorney']},
+    {test:/restaurant|diner|bistro/,  kws:['restaurant','diner','bistro','eatery','cafe restaurant','family restaurant','local restaurant']},
+    {test:/cafe|coffee/,              kws:['cafe','coffee shop','coffee house','espresso bar','bakery cafe']},
+    {test:/gym|fitness|crossfit/,     kws:['gym','fitness center','health club','crossfit box','personal training studio','workout center']},
+    {test:/salon|hair|barbershop/,    kws:['hair salon','beauty salon','barber shop','hair stylist','hair studio','men haircut']},
+    {test:/nail/,                     kws:['nail salon','nail spa','manicure pedicure','nail studio']},
+    {test:/spa|massage/,              kws:['spa','massage therapy','day spa','wellness center','massage center']},
+    {test:/plumb/,                    kws:['plumber','plumbing service','plumbing company','drain cleaning','pipe repair']},
+    {test:/electric/,                 kws:['electrician','electrical contractor','electrical service','electrical repair','licensed electrician']},
+    {test:/hvac|air condition|heating/,kws:['HVAC','air conditioning','heating and cooling','AC repair','furnace repair','AC installation']},
+    {test:/roof/,                     kws:['roofing company','roof repair','roof replacement','roofing contractor','roofer']},
+    {test:/real estate|realtor/,      kws:['real estate agent','realtor','real estate office','property agent','real estate broker']},
+    {test:/mortgage|loan broker/,     kws:['mortgage broker','mortgage lender','home loan','mortgage company','refinance']},
+    {test:/account|bookkeep/,         kws:['accountant','accounting firm','CPA','bookkeeper','tax accountant','tax preparer']},
+    {test:/insurance/,                kws:['insurance agent','insurance broker','insurance company','life insurance','auto insurance']},
+    {test:/auto repair|mechanic/,     kws:['auto repair shop','mechanic','car repair','auto service','automotive repair','oil change']},
+    {test:/car dealer/,               kws:['car dealership','auto dealer','used car dealer','new car dealer','vehicle sales']},
+    {test:/hotel|motel|inn/,          kws:['hotel','motel','inn','bed and breakfast','boutique hotel']},
+    {test:/landscap|lawn/,            kws:['landscaping company','lawn care','lawn service','garden service','landscape design']},
+    {test:/cleaning|janitorial/,      kws:['cleaning service','house cleaning','commercial cleaning','janitorial service','maid service']},
+    {test:/vet|veterinar/,            kws:['veterinarian','animal clinic','pet clinic','animal hospital','vet clinic']},
+    {test:/optom|eye doctor|vision/,  kws:['optometrist','eye doctor','vision center','eye clinic','optical store']},
+    {test:/pharmacy|drugstore/,       kws:['pharmacy','drugstore','compounding pharmacy','independent pharmacy']},
+    {test:/tutoring|tutor/,           kws:['tutoring center','tutor','learning center','academic tutoring','private tutor']},
+    {test:/daycare|childcare|nursery/,kws:['daycare','childcare center','nursery','preschool','early learning center']},
   ];
-  for (const {test, kws} of sets) if (test.test(n)) return kws;
-  const base = niche.trim();
+  for (const {test,kws} of sets) if (test.test(n)) return kws;
+  const base=niche.trim();
   return [base, base+' near me', base+' service', base+' company', base+' office', 'best '+base, 'local '+base, 'professional '+base];
 }
 
+// Run a single Apify Google Maps search and return items
+async function apifySearch(token, searchTerm, maxResults, country) {
+  const runResp = await fetch(
+    `https://api.apify.com/v2/acts/compass~google-maps-scraper/runs?token=${encodeURIComponent(token)}`,
+    {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        searchStringsArray:        [searchTerm],
+        maxCrawledPlacesPerSearch: Math.min(maxResults + 30, 200),
+        language:                  'en',
+        countryCode:               country || undefined,
+        skipClosedPlaces:          true,
+      }),
+    }
+  );
+  if (!runResp.ok) {
+    const err = await runResp.json().catch(()=>({}));
+    let msg = err.error?.message || err.message || `HTTP ${runResp.status}`;
+    if (runResp.status===401||runResp.status===403)
+      msg = `Invalid Apify token (${runResp.status}). Go to apify.com → Settings → Integrations → copy Personal API token.`;
+    throw new Error(msg);
+  }
+  const runData  = await runResp.json();
+  let runId      = runData.data?.id;
+  let datasetId  = runData.data?.defaultDatasetId;
+  if (!runId) throw new Error('Apify did not return a run ID');
+
+  // Poll
+  let status='READY', pollFails=0;
+  while ((status==='READY'||status==='RUNNING') && !leadsAbort) {
+    await new Promise(r=>setTimeout(r,3500));
+    try {
+      const sr = await fetch(`https://api.apify.com/v2/actor-runs/${runId}?token=${encodeURIComponent(token)}`);
+      const sd = await sr.json();
+      status    = sd.data?.status || 'FAILED';
+      datasetId = sd.data?.defaultDatasetId || datasetId;
+      pollFails = 0;
+    } catch(_) { if (++pollFails>5) status='FAILED'; }
+  }
+  if (status!=='SUCCEEDED') return [];
+
+  const itemsResp = await fetch(
+    `https://api.apify.com/v2/datasets/${datasetId}/items?token=${encodeURIComponent(token)}&limit=300&clean=true`
+  );
+  if (!itemsResp.ok) return [];
+  const data = await itemsResp.json();
+  return Array.isArray(data) ? data : (data.items||[]);
+}
+
+// Extract a postal code from an address string
+function extractZip(address) {
+  if (!address) return null;
+  // US zip: 5 digits, or 5+4
+  const us = address.match(/\b(\d{5})(?:-\d{4})?\b/);
+  if (us) return us[1];
+  // UK postcode
+  const uk = address.match(/\b([A-Z]{1,2}\d{1,2}[A-Z]?\s*\d[A-Z]{2})\b/i);
+  if (uk) return uk[1].replace(/\s+/,' ').trim();
+  // Canada
+  const ca = address.match(/\b([A-Z]\d[A-Z]\s*\d[A-Z]\d)\b/i);
+  if (ca) return ca[1].replace(/\s+/,' ').trim();
+  // Generic: last token that looks like a postal code (digits or alphanumeric)
+  const parts = address.split(',').map(s=>s.trim());
+  for (let i=parts.length-1;i>=0;i--) {
+    if (/^[A-Z0-9][A-Z0-9\s-]{2,9}$/i.test(parts[i]) && parts[i].length<=10) return parts[i];
+  }
+  return null;
+}
+
 async function startLeadsSearch() {
-  const apifyToken = cfg.apify();
-  const niche      = document.getElementById('leads-niche').value.trim();
-  const country    = document.getElementById('leads-country').value.trim();
-  const location   = document.getElementById('leads-location').value.trim();
-  const count      = Math.max(1, Math.min(500, parseInt(document.getElementById('leads-count').value) || 50));
-  const minRev     = parseInt(document.getElementById('leads-min-reviews').value) || 0;
-  const maxRev     = parseInt(document.getElementById('leads-max-reviews').value) || Infinity;
+  const token    = cfg.apify();
+  const niche    = document.getElementById('leads-niche').value.trim();
+  const country  = document.getElementById('leads-country').value.trim();
+  const city     = document.getElementById('leads-city').value.trim();
+  const count    = Math.max(1, Math.min(500, parseInt(document.getElementById('leads-count').value)||50));
+  const minRev   = parseInt(document.getElementById('leads-min-reviews').value)||0;
+  const maxRev   = parseInt(document.getElementById('leads-max-reviews').value)||Infinity;
 
-  const warn    = document.getElementById('leads-key-warn');
-  const warnMsg = document.getElementById('leads-key-warn-msg');
-
-  if (!apifyToken) {
+  const warn=document.getElementById('leads-key-warn'), warnMsg=document.getElementById('leads-key-warn-msg');
+  if (!token) {
     warn.classList.remove('hidden');
-    warnMsg.textContent = 'Apify token is missing. Enter it in the "Apify Token" field in the config bar at the top of the page.';
+    warnMsg.textContent='Apify token is missing. Enter it in the "Apify Token" field in the config bar at the top.';
     return;
   }
-  if (!niche)    { alert('Enter a niche'); return; }
-  if (!location) { alert('Enter a city or zip code'); return; }
-
+  if (!niche)  { alert('Enter a niche'); return; }
+  if (!city)   { alert('Enter a city name'); return; }
   warn.classList.add('hidden');
-  leadsAbort = false;
+  leadsAbort=false;
 
-  const btn     = document.getElementById('btn-leads-search');
-  btn.disabled  = true;
+  const btn=document.getElementById('btn-leads-search');
+  btn.disabled=true;
   document.getElementById('leads-spinner').classList.remove('hidden');
 
   const statusWrap = document.getElementById('leads-status-wrap');
   const statusText = document.getElementById('leads-status-text');
-  const kwText     = document.getElementById('leads-kw-text');
+  const detailText = document.getElementById('leads-detail-text');
   const fillBar    = document.getElementById('leads-progress-fill');
   statusWrap.classList.remove('hidden');
-  statusText.style.color = '#94a3b8';
+  statusText.style.color='#94a3b8';
 
-  const setStatus = (msg, kw, isErr) => {
-    statusText.textContent = msg;
-    statusText.style.color = isErr ? '#fca5a5' : '#94a3b8';
-    if (kw !== undefined) kwText.textContent = kw;
+  const setStatus=(msg,detail,isErr)=>{
+    statusText.textContent=msg;
+    statusText.style.color=isErr?'#fca5a5':'#94a3b8';
+    if (detail!==undefined) detailText.textContent=detail;
   };
-  const setProgress = (n, total) => {
-    fillBar.style.width = `${Math.round(Math.min(n / total, 1) * 100)}%`;
-  };
+  const setBar=(n,tot)=>{ fillBar.style.width=`${Math.round(Math.min(n/tot,1)*100)}%`; };
 
-  const locationStr = location + (country ? `, ${country}` : '');
-  const keywords    = nicheKeywords(niche);
-  const found       = new Map();
-  const seenPlaces  = new Set();
+  const found      = new Map();  // website → place object
+  const seenPlaces = new Set();  // deduplicate by placeId / title+address
+  const keywords   = nicheKeywords(niche);
+  const countryStr = country ? `, ${country}` : '';
 
-  for (let ki = 0; ki < keywords.length && found.size < count && !leadsAbort; ki++) {
-    const kw         = keywords[ki];
-    const searchTerm = `${kw} in ${locationStr}`;
-    const needed     = count - found.size;
-
-    setStatus(`Searching (${found.size}/${count} found)…`, `Keyword ${ki+1}/${keywords.length}: "${searchTerm}"`);
-    setProgress(found.size, count);
-
-    let runId, datasetId;
-    try {
-      const runResp = await fetch(
-        `https://api.apify.com/v2/acts/compass~google-maps-scraper/runs?token=${encodeURIComponent(apifyToken)}`,
-        {
-          method:  'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({
-            searchStringsArray:        [searchTerm],
-            maxCrawledPlacesPerSearch: Math.min(needed + 30, 200),
-            language:                  'en',
-            countryCode:               country || undefined,
-            skipClosedPlaces:          true,
-          }),
-        }
-      );
-
-      if (!runResp.ok) {
-        let errMsg = `HTTP ${runResp.status}`;
-        try {
-          const errBody = await runResp.json();
-          errMsg = errBody.error?.message || errBody.message || errMsg;
-          if (runResp.status === 401 || runResp.status === 403) {
-            errMsg = `Invalid Apify token (${runResp.status}). Go to apify.com → Settings → Integrations to copy your Personal API token (starts with apify_api_…).`;
-          }
-        } catch(_) {}
-        setStatus(`❌ Apify error: ${errMsg}`, '', true);
-        break;
-      }
-
-      const runData = await runResp.json();
-      runId     = runData.data?.id;
-      datasetId = runData.data?.defaultDatasetId;
-      if (!runId) { setStatus('❌ Apify did not return a run ID', '', true); break; }
-
-    } catch(e) {
-      setStatus(`❌ Network error: ${e.message}`, '', true);
-      break;
+  // Helper: process raw Apify items into found map and return discovered zip codes
+  function processItems(items, discoveredZips) {
+    let added=0;
+    for (const item of items) {
+      if (found.size>=count) break;
+      const website=item.website||item.url;
+      if (!website) continue;
+      const reviews=item.reviewsCount??item.totalReviews??0;
+      if (reviews<minRev) continue;
+      if (maxRev!==Infinity && reviews>maxRev) continue;
+      const dk=item.placeId||`${item.title}|${item.address}`;
+      if (seenPlaces.has(dk)) continue;
+      seenPlaces.add(dk);
+      const norm=website.startsWith('http')?website:'https://'+website;
+      if (found.has(norm)) continue;
+      found.set(norm,{title:item.title||item.name,address:item.address,phone:item.phone||item.phoneUnformatted,reviews,rating:item.totalScore,category:item.categoryName||item.categories?.[0]});
+      added++;
+      // Extract zip from address for phase 2
+      const zip=extractZip(item.address);
+      if (zip && !discoveredZips.has(zip)) discoveredZips.set(zip, 0);
     }
-
-    // Poll until run finishes
-    let runStatus = 'READY';
-    let pollFails = 0;
-    while ((runStatus === 'READY' || runStatus === 'RUNNING') && !leadsAbort) {
-      await new Promise(r => setTimeout(r, 3500));
-      try {
-        const sr  = await fetch(`https://api.apify.com/v2/actor-runs/${runId}?token=${encodeURIComponent(apifyToken)}`);
-        const sd  = await sr.json();
-        runStatus = sd.data?.status || 'FAILED';
-        datasetId = sd.data?.defaultDatasetId || datasetId;
-        setStatus(`"${kw}" — ${runStatus.toLowerCase()}… (${found.size}/${count} found)`, kwText.textContent);
-        pollFails = 0;
-      } catch(_) {
-        if (++pollFails > 5) { runStatus = 'FAILED'; }
-      }
-    }
-
-    if (leadsAbort) break;
-
-    if (runStatus !== 'SUCCEEDED') {
-      setStatus(`Run ended with status: ${runStatus} — trying next keyword…`, kwText.textContent);
-      continue;
-    }
-
-    // Fetch dataset items
-    try {
-      const itemsResp = await fetch(
-        `https://api.apify.com/v2/datasets/${datasetId}/items?token=${encodeURIComponent(apifyToken)}&limit=300&clean=true`
-      );
-      if (!itemsResp.ok) {
-        setStatus(`Dataset fetch failed (${itemsResp.status}) — trying next keyword…`, kwText.textContent);
-        continue;
-      }
-      const items = await itemsResp.json();
-      const list  = Array.isArray(items) ? items : (items.items || []);
-
-      for (const item of list) {
-        if (found.size >= count) break;
-        const website = item.website || item.url;
-        if (!website) continue;
-
-        const reviews = item.reviewsCount ?? item.totalReviews ?? 0;
-        if (reviews < minRev) continue;
-        if (maxRev !== Infinity && reviews > maxRev) continue;
-
-        const dedupeKey = item.placeId || `${item.title}|${item.address}`;
-        if (seenPlaces.has(dedupeKey)) continue;
-        seenPlaces.add(dedupeKey);
-
-        const normalised = website.startsWith('http') ? website : 'https://' + website;
-        if (found.has(normalised)) continue;
-
-        found.set(normalised, {
-          title:    item.title || item.name,
-          address:  item.address,
-          phone:    item.phone || item.phoneUnformatted,
-          reviews,
-          rating:   item.totalScore,
-          category: item.categoryName || item.categories?.[0],
-        });
-
-        setProgress(found.size, count);
-        setStatus(`Found ${found.size}/${count} leads…`, kwText.textContent);
-      }
-    } catch(e) {
-      // dataset fetch threw — continue with next keyword
-    }
+    return added;
   }
 
-  btn.disabled = false;
-  document.getElementById('leads-spinner').classList.add('hidden');
+  // ─ PHASE 1: Broad city search to discover zip codes ——————————————————
+  setStatus(`🔍 Phase 1: Discovering zip codes in ${city}…`, `Using niche “${keywords[0]}” for discovery`);
+  setBar(0, count);
 
-  if (!found.size) {
-    setStatus('⚠️ No leads found. Check: is your Apify token correct? Does the niche exist in this location? Try relaxing the review range.', '', true);
-    setProgress(0, 1);
+  const discoveredZips = new Map(); // zip → search count (how many times we've searched it)
+
+  try {
+    const broadTerm  = `${keywords[0]} in ${city}${countryStr}`;
+    const broadItems = await apifySearch(token, broadTerm, 100, country);
+    processItems(broadItems, discoveredZips);
+    // Also collect zips from items that had no website
+    for (const item of broadItems) {
+      const zip=extractZip(item.address);
+      if (zip && !discoveredZips.has(zip)) discoveredZips.set(zip,0);
+    }
+    setStatus(`📍 Found ${discoveredZips.size} zip codes in ${city}, ${found.size}/${count} leads so far…`,
+      `Zip codes: ${[...discoveredZips.keys()].slice(0,8).join(', ')}${discoveredZips.size>8?'…':''}`);
+  } catch(e) {
+    setStatus(`❌ ${e.message}`, '', true);
+    btn.disabled=false;
+    document.getElementById('leads-spinner').classList.add('hidden');
     return;
   }
 
-  setStatus(`✓ ${found.size} lead${found.size !== 1 ? 's' : ''} found! Loading into table…`, '');
-  setProgress(found.size, count);
+  if (leadsAbort) { btn.disabled=false; document.getElementById('leads-spinner').classList.add('hidden'); return; }
 
-  const existingSet = new Set(urls.map(u => u.url));
-  for (const [website, info] of found) {
+  // If no zips discovered, fall back to keyword iteration with city name
+  if (discoveredZips.size===0) {
+    setStatus(`⚠️ No zip codes found in initial search. Trying keyword variations for ${city}…`, '');
+  }
+
+  // ─ PHASE 2: Iterate zip codes one by one ——————————————————————
+  const zipList = [...discoveredZips.keys()];
+  let zipIdx=0, kwIdx=0;
+
+  // We interleave: for each zip, try the first keyword; if still need more, try next keyword for same zip; then next zip
+  // Strategy: zip × keyword combinations until count reached
+  const searchQueue = [];
+  // Primary: each zip with main keyword
+  for (const zip of zipList) searchQueue.push({zip, kw: keywords[0]});
+  // Secondary: each zip with remaining keywords (if still needed)
+  for (let ki=1; ki<keywords.length; ki++)
+    for (const zip of zipList) searchQueue.push({zip, kw: keywords[ki]});
+  // Fallback: city name with remaining keywords (when no zips available)
+  for (const kw of keywords.slice(1)) searchQueue.push({zip: null, kw});
+
+  const totalSearches = searchQueue.length;
+  let searchesDone=0;
+
+  for (const {zip, kw} of searchQueue) {
+    if (found.size>=count || leadsAbort) break;
+    const locationStr = zip ? `${zip}, ${city}${countryStr}` : `${city}${countryStr}`;
+    const searchTerm  = `${kw} in ${locationStr}`;
+    searchesDone++;
+    const label = zip
+      ? `📍 Zip ${zip} (${searchesDone}/${Math.min(totalSearches, zipList.length)}) — ${found.size}/${count} leads`
+      : `🔄 Fallback keyword — ${found.size}/${count} leads`;
+    setStatus(label, `Searching: "${searchTerm}"`);
+    setBar(found.size, count);
+
+    try {
+      const items = await apifySearch(token, searchTerm, count-found.size, country);
+      const added = processItems(items, discoveredZips);
+      // Discover any new zips from these results too
+      for (const item of items) {
+        const zip2=extractZip(item.address);
+        if (zip2 && !discoveredZips.has(zip2)) {
+          discoveredZips.set(zip2,0);
+          // Add to queue dynamically
+          searchQueue.push({zip:zip2, kw:keywords[0]});
+        }
+      }
+      setStatus(`📍 Zip ${zip||'N/A'} done (+${added} leads) — total ${found.size}/${count}`, `Searched: "${searchTerm}"`);
+      setBar(found.size, count);
+    } catch(e) {
+      // Non-fatal: skip this zip/keyword combo
+      setStatus(`⚠️ ${e.message} — skipping, continuing…`, detailText.textContent);
+    }
+  }
+
+  btn.disabled=false;
+  document.getElementById('leads-spinner').classList.add('hidden');
+
+  if (!found.size) {
+    setStatus('⚠️ No leads found with a website in this city/niche/review range. Try a broader city name or relax the review range.','',true);
+    setBar(0,1);
+    return;
+  }
+
+  setStatus(`✓ ${found.size} lead${found.size!==1?'s':''} found! Adding to table…`,'');
+  setBar(found.size,count);
+
+  const existingSet=new Set(urls.map(u=>u.url));
+  let added=0;
+  for (const [website,info] of found) {
     if (existingSet.has(website)) continue;
-    urls.push({
-      url:      website,
-      name:     info.title || website.replace(/^https?:\/\/(www\.)?/, '').split('/')[0],
-      reviews:  info.reviews,
-      rating:   info.rating,
-      address:  info.address,
-      phone:    info.phone,
-      category: info.category,
-    });
+    urls.push({url:website, name:info.title||website.replace(/^https?:\/\/(www\.)?/,'').split('/')[0],
+      reviews:info.reviews, rating:info.rating, address:info.address, phone:info.phone, category:info.category});
+    added++;
   }
 
   document.getElementById('drop-zone').classList.add('hidden');
   document.getElementById('main-section').classList.remove('hidden');
-  document.getElementById('url-heading').textContent    = `${urls.length} URL${urls.length !== 1 ? 's' : ''} found`;
-  document.getElementById('url-subheading').textContent = `${found.size} leads added from Google Maps via Apify`;
-
-  renderTable();
-  updateStats();
-  setTimeout(closeLeadsModal, 800);
+  document.getElementById('url-heading').textContent=`${urls.length} URL${urls.length!==1?'s':''} found`;
+  document.getElementById('url-subheading').textContent=`${added} new leads added from Google Maps · ${city} · ${discoveredZips.size} zip codes searched`;
+  renderTable(); updateStats();
+  setTimeout(closeLeadsModal, 900);
 }
 
 // ── Table ──────────────────────────────────────────────────────────────────────────────────
 function renderTable() {
-  document.getElementById('table-body').innerHTML = urls.map((_, i) => rowHtml(i)).join('');
+  document.getElementById('table-body').innerHTML=urls.map((_,i)=>rowHtml(i)).join('');
 }
-
 function rowHtml(idx) {
-  const u  = urls[idx];
-  const r  = results[u.url] || {};
-  const st = r.status || 'pending';
-
-  const statusCell = {
-    pending: '<span class="text-slate-500">Pending</span>',
-    running: '<span class="text-yellow-400 flex items-center gap-1"><span class="spinner"></span>Scraping…</span>',
-    done:    '<span class="text-green-400">Done</span>',
-    error:   `<span class="text-red-400">Error<br><span class="text-xs text-red-300">${esc(r.error||'').slice(0,50)}</span></span>`,
-  }[st] || `<span class="text-slate-400">${st}</span>`;
-
-  const metaLine = (u.address || u.phone || u.reviews != null)
-    ? `<div class="text-slate-500 text-xs mt-0.5">${[
-        u.reviews != null ? `★ ${u.rating?.toFixed(1) ?? '?'} (${u.reviews})` : '',
-        u.phone   ? u.phone : '',
-        u.address ? u.address.split(',').slice(0,2).join(',') : '',
-      ].filter(Boolean).join(' · ')}</div>`
-    : '';
-
+  const u=urls[idx], r=results[u.url]||{}, st=r.status||'pending';
+  const statusCell={
+    pending:'<span class="text-slate-500">Pending</span>',
+    running:'<span class="text-yellow-400 flex items-center gap-1"><span class="spinner"></span>Scraping…</span>',
+    done:   '<span class="text-green-400">Done</span>',
+    error:  `<span class="text-red-400">Error<br><span class="text-xs text-red-300">${esc(r.error||'').slice(0,50)}</span></span>`,
+  }[st]||`<span class="text-slate-400">${st}</span>`;
+  const metaLine=(u.address||u.phone||u.reviews!=null)
+    ?`<div class="text-slate-500 text-xs mt-0.5">${[u.reviews!=null?`★ ${u.rating?.toFixed(1)??'?'} (${u.reviews})`:'',u.phone?u.phone:'',u.address?u.address.split(',').slice(0,2).join(','):''].filter(Boolean).join(' · ')}</div>`
+    :'';
   return `<tr id="row-${idx}">
     <td><input type="checkbox" class="url-cb" data-idx="${idx}" checked/></td>
     <td class="text-slate-500">${idx+1}</td>
-    <td class="max-w-xs">
-      <a href="${esc(u.url)}" target="_blank" class="text-indigo-400 hover:underline text-xs break-all">${esc(u.name||u.url)}</a>
-      ${metaLine}
-    </td>
+    <td class="max-w-xs"><a href="${esc(u.url)}" target="_blank" class="text-indigo-400 hover:underline text-xs break-all">${esc(u.name||u.url)}</a>${metaLine}</td>
     <td>${statusCell}</td>
     <td>${dmCell(idx)}</td>
     <td>${emailCell(idx)}</td>
@@ -735,196 +715,101 @@ function rowHtml(idx) {
     <td>${actionsCell(idx)}</td>
   </tr>`;
 }
-
 function dmCell(idx) {
-  const r = results[urls[idx].url] || {};
-  const h = r.hunter_data;
+  const r=results[urls[idx].url]||{}, h=r.hunter_data;
   if (hunterRunning.has(idx)) return '<span class="text-yellow-400 flex items-center gap-1"><span class="spinner"></span>Looking up…</span>';
   if (!h) return '<span class="text-slate-600">—</span>';
   if (h.error) return `<span class="text-red-400 text-xs" title="${esc(h.error)}">⚠ ${esc(h.error.slice(0,35))}</span>`;
   if (!h.found) return `<span class="text-slate-500 text-xs" title="Emails indexed: ${h.total??0}">No contacts (${h.total??0})</span>`;
-  const c = h.top_contacts[0] || {};
-  return `<div class="text-xs">
-    ${h.company_name ? `<div class="text-slate-500 text-xs">${esc(h.company_name)}</div>` : ''}
-    <div class="text-green-400 font-semibold">${esc(c.name||'Contact')}</div>
-    <div class="text-slate-300">${esc(c.position||'')}</div>
-    ${c.seniority ? `<div class="text-slate-500 capitalize text-xs">${esc(c.seniority)}</div>` : ''}
-    ${c.linkedin  ? `<a href="${esc(c.linkedin)}" target="_blank" class="text-indigo-400 text-xs hover:underline">LinkedIn ↗</a>` : ''}
-  </div>`;
+  const c=h.top_contacts[0]||{};
+  return `<div class="text-xs">${h.company_name?`<div class="text-slate-500 text-xs">${esc(h.company_name)}</div>`:''}<div class="text-green-400 font-semibold">${esc(c.name||'Contact')}</div><div class="text-slate-300">${esc(c.position||'')}</div>${c.seniority?`<div class="text-slate-500 capitalize text-xs">${esc(c.seniority)}</div>`:''} ${c.linkedin?`<a href="${esc(c.linkedin)}" target="_blank" class="text-indigo-400 text-xs hover:underline">LinkedIn ↗</a>`:''}</div>`;
 }
-
 function emailCell(idx) {
-  const r = results[urls[idx].url] || {};
-  const h = r.hunter_data;
-  if (!h || !h.found) return '<span class="text-slate-600">—</span>';
-  const c = h.top_contacts[0] || {};
-  return `<div class="text-xs">
-    <div class="text-indigo-300">${esc(c.email||'')}</div>
-    ${c.phone ? `<div class="text-slate-400">${esc(c.phone)}</div>` : ''}
-    ${h.top_contacts.length > 1 ? `<div class="text-slate-600">+${h.top_contacts.length-1} more</div>` : ''}
-  </div>`;
+  const r=results[urls[idx].url]||{}, h=r.hunter_data;
+  if (!h||!h.found) return '<span class="text-slate-600">—</span>';
+  const c=h.top_contacts[0]||{};
+  return `<div class="text-xs"><div class="text-indigo-300">${esc(c.email||'')}</div>${c.phone?`<div class="text-slate-400">${esc(c.phone)}</div>`:''} ${h.top_contacts.length>1?`<div class="text-slate-600">+${h.top_contacts.length-1} more</div>`:''}</div>`;
 }
-
 function croCell(idx) {
-  const r   = results[urls[idx].url] || {};
-  const cro = r.cro_audit;
+  const r=results[urls[idx].url]||{}, cro=r.cro_audit;
   if (croRunning.has(idx)) return '<span class="text-yellow-400 flex items-center gap-1"><span class="spinner"></span>Running…</span>';
   if (!cro) return '<span class="text-slate-600">—</span>';
   if (cro.error) return `<span class="text-red-400 text-xs">Error</span>`;
-  const cs = cro.client_summary || cro.summary || {};
-  const h  = cs.high   || cs.confirmed_high   || 0;
-  const m  = cs.medium || cs.confirmed_medium || 0;
-  const l  = cs.low    || 0;
-  const badges = [
-    h ? `<span class="badge badge-red">${h}H</span>` : '',
-    m ? `<span class="badge badge-yellow">${m}M</span>` : '',
-    l ? `<span class="badge badge-slate">${l}L</span>` : '',
-  ].filter(Boolean).join(' ') || '<span class="badge badge-green">✓</span>';
-  return `<div class="flex gap-1 items-center flex-wrap">
-    ${badges}
-    <button class="btn btn-slate btn-sm" onclick="showCroModal(${idx})">Detail</button>
-  </div>`;
+  const cs=cro.client_summary||cro.summary||{};
+  const h=cs.high||cs.confirmed_high||0, m=cs.medium||cs.confirmed_medium||0, l=cs.low||0;
+  const badges=[h?`<span class="badge badge-red">${h}H</span>`:'',m?`<span class="badge badge-yellow">${m}M</span>`:'',l?`<span class="badge badge-slate">${l}L</span>`:''].filter(Boolean).join(' ')||'<span class="badge badge-green">✓</span>';
+  return `<div class="flex gap-1 items-center flex-wrap">${badges}<button class="btn btn-slate btn-sm" onclick="showCroModal(${idx})">Detail</button></div>`;
 }
-
 function actionsCell(idx) {
-  const r  = results[urls[idx].url] || {};
-  const st = r.status || 'pending';
-  const h  = r.hunter_data;
-  const parts = [];
-
-  if (st === 'pending' || st === 'error') {
-    parts.push(`<button class="btn btn-primary btn-sm" onclick="runOne(${idx})">▶ Run</button>`);
-  } else if (st === 'done') {
-    parts.push(`<button class="btn btn-slate btn-sm" onclick="runOne(${idx})">&#x21BA;</button>`);
+  const r=results[urls[idx].url]||{}, st=r.status||'pending', h=r.hunter_data, parts=[];
+  if (st==='pending'||st==='error') parts.push(`<button class="btn btn-primary btn-sm" onclick="runOne(${idx})">▶ Run</button>`);
+  else if (st==='done') parts.push(`<button class="btn btn-slate btn-sm" onclick="runOne(${idx})">&#x21BA;</button>`);
+  if (st==='done'&&(!h||h.error)&&!hunterRunning.has(idx)) parts.push(`<button class="btn btn-yellow btn-sm" onclick="lookupHunter(${idx})">👤 DM</button>`);
+  if (r.html&&!croRunning.has(idx)) parts.push(`<button class="btn btn-purple btn-sm" onclick="startCro(${idx})">${r.cro_audit?'&#x21BA; CRO':'⚙ CRO'}</button>`);
+  if (r.screenshot_b64) parts.push(`<button class="btn btn-slate btn-sm" onclick="showScreenshot(${idx})">🖼 SS</button>`);
+  else if (r.screenshot_error&&st==='done') parts.push(`<button class="btn btn-slate btn-sm" disabled title="Screenshot failed: ${esc(r.screenshot_error)}">🖼 SS</button>`);
+  if (h&&h.found) parts.push(`<button class="btn btn-green btn-sm" onclick="dlContact(${idx})">↓ CSV</button>`);
+  if (h&&h.found) {
+    const siteUrl=h.company_website||('https://'+h.domain), sameDomain=siteUrl===urls[idx].url||siteUrl===urls[idx].url+'/';
+    if (!sameDomain&&!(results[siteUrl]&&results[siteUrl].status==='done'))
+      parts.push(`<button class="btn btn-primary btn-sm" onclick="auditDmSite(${idx})" title="Audit ${esc(siteUrl)}">⚙ Audit site</button>`);
   }
-
-  if (st === 'done' && (!h || h.error) && !hunterRunning.has(idx)) {
-    parts.push(`<button class="btn btn-yellow btn-sm" onclick="lookupHunter(${idx})">👤 DM</button>`);
-  }
-
-  if (r.html && !croRunning.has(idx)) {
-    parts.push(`<button class="btn btn-purple btn-sm" onclick="startCro(${idx})">${r.cro_audit ? '&#x21BA; CRO' : '⚙ CRO'}</button>`);
-  }
-
-  if (r.screenshot_b64) {
-    parts.push(`<button class="btn btn-slate btn-sm" onclick="showScreenshot(${idx})">🖼 SS</button>`);
-  } else if (r.screenshot_error && st === 'done') {
-    parts.push(`<button class="btn btn-slate btn-sm" disabled title="Screenshot failed: ${esc(r.screenshot_error)}">🖼 SS</button>`);
-  }
-
-  if (h && h.found) {
-    parts.push(`<button class="btn btn-green btn-sm" onclick="dlContact(${idx})">↓ CSV</button>`);
-  }
-
-  if (h && h.found) {
-    const siteUrl    = h.company_website || ('https://' + h.domain);
-    const sameDomain = siteUrl === urls[idx].url || siteUrl === urls[idx].url + '/';
-    if (!sameDomain) {
-      const done = results[siteUrl] && results[siteUrl].status === 'done';
-      if (!done) parts.push(`<button class="btn btn-primary btn-sm" onclick="auditDmSite(${idx})" title="Audit ${esc(siteUrl)}">⚙ Audit site</button>`);
-    }
-  }
-
   return `<div class="flex gap-1 flex-wrap">${parts.join('')}</div>`;
 }
-
-function updateRow(idx) {
-  const row = document.getElementById(`row-${idx}`);
-  if (row) row.outerHTML = rowHtml(idx);
-}
+function updateRow(idx) { const row=document.getElementById(`row-${idx}`); if (row) row.outerHTML=rowHtml(idx); }
 
 // ── Stats ──────────────────────────────────────────────────────────────────────────────────
 function updateStats() {
-  const vals = Object.values(results);
-  document.getElementById('st-total').textContent = urls.length;
-  document.getElementById('st-done').textContent  = vals.filter(r => r.status === 'done').length;
-  document.getElementById('st-nodm').textContent  = vals.filter(r => r.status === 'done' && r.hunter_data && !r.hunter_data.found).length;
-  document.getElementById('st-error').textContent = vals.filter(r => r.status === 'error').length;
-  document.getElementById('st-cro').textContent   = vals.filter(r => r.cro_audit && !r.cro_audit.error).length;
+  const vals=Object.values(results);
+  document.getElementById('st-total').textContent=urls.length;
+  document.getElementById('st-done').textContent=vals.filter(r=>r.status==='done').length;
+  document.getElementById('st-nodm').textContent=vals.filter(r=>r.status==='done'&&r.hunter_data&&!r.hunter_data.found).length;
+  document.getElementById('st-error').textContent=vals.filter(r=>r.status==='error').length;
+  document.getElementById('st-cro').textContent=vals.filter(r=>r.cro_audit&&!r.cro_audit.error).length;
 }
 
-// ── Run one URL ──────────────────────────────────────────────────────────────────────────────
+// ── Run one ──────────────────────────────────────────────────────────────────────────────────
 async function runOne(idx) {
-  const u    = urls[idx];
-  const base = cfg.api();
+  const u=urls[idx], base=cfg.api();
   if (!base) { alert('Set API URL in config'); return; }
-
-  results[u.url] = {status: 'running'};
-  updateRow(idx);
-  updateStats();
-
+  results[u.url]={status:'running'}; updateRow(idx); updateStats();
   try {
-    const resp = await fetch(base + '/scrape', {
-      method:  'POST',
-      headers: {'Content-Type': 'application/json'},
-      body:    JSON.stringify({url: u.url, industry: cfg.industry(), run_cro: true}),
-    });
-    const data = await resp.json();
-    results[u.url] = data.error ? {status: 'error', error: data.error} : {status: 'done', ...data};
-  } catch(e) {
-    results[u.url] = {status: 'error', error: e.message};
-  }
-
-  updateRow(idx);
-  updateStats();
-
-  if (results[u.url].status === 'done' && cfg.hunter()) {
-    lookupHunter(idx);
-  }
+    const resp=await fetch(base+'/scrape',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:u.url,industry:cfg.industry(),run_cro:true})});
+    const data=await resp.json();
+    results[u.url]=data.error?{status:'error',error:data.error}:{status:'done',...data};
+  } catch(e) { results[u.url]={status:'error',error:e.message}; }
+  updateRow(idx); updateStats();
+  if (results[u.url].status==='done'&&cfg.hunter()) lookupHunter(idx);
 }
 
-// ── Run all ──────────────────────────────────────────────────────────────────────────────
 async function runAll() {
   if (running) return;
-  const base = cfg.api();
+  const base=cfg.api();
   if (!base) { alert('Set API URL in config'); return; }
-
-  const selected = [...document.querySelectorAll('.url-cb:checked')].map(cb => parseInt(cb.dataset.idx));
+  const selected=[...document.querySelectorAll('.url-cb:checked')].map(cb=>parseInt(cb.dataset.idx));
   if (!selected.length) { alert('Select at least one URL'); return; }
-
-  running  = true;
-  stopFlag = false;
-  document.getElementById('btn-run').disabled  = true;
-  document.getElementById('btn-stop').disabled = false;
+  running=true; stopFlag=false;
+  document.getElementById('btn-run').disabled=true;
+  document.getElementById('btn-stop').disabled=false;
   document.getElementById('progress-wrap').classList.remove('hidden');
-
-  let done = 0;
-  const total = selected.length;
-  const updateProgress = (label) => {
-    document.getElementById('progress-label').textContent = label || `Running… ${done}/${total}`;
-    document.getElementById('progress-count').textContent = `${done} / ${total}`;
-    document.getElementById('progress-bar').style.width   = `${Math.round(done/total*100)}%`;
+  let done=0; const total=selected.length;
+  const upProg=(label)=>{
+    document.getElementById('progress-label').textContent=label||`Running… ${done}/${total}`;
+    document.getElementById('progress-count').textContent=`${done} / ${total}`;
+    document.getElementById('progress-bar').style.width=`${Math.round(done/total*100)}%`;
   };
-  updateProgress('Starting…');
-
-  const pool    = [...selected];
-  const workers = cfg.workers();
-
-  async function worker() {
-    while (pool.length && !stopFlag) {
-      const idx = pool.shift();
-      await runOne(idx);
-      done++;
-      updateProgress(done === total ? 'Complete!' : undefined);
-    }
-  }
-
-  await Promise.all(Array.from({length: workers}, worker));
-  running = false;
-  document.getElementById('btn-run').disabled  = false;
-  document.getElementById('btn-stop').disabled = true;
+  upProg('Starting…');
+  const pool=[...selected];
+  async function worker() { while(pool.length&&!stopFlag){const idx=pool.shift();await runOne(idx);done++;upProg(done===total?'Complete!':undefined);} }
+  await Promise.all(Array.from({length:cfg.workers()},worker));
+  running=false;
+  document.getElementById('btn-run').disabled=false;
+  document.getElementById('btn-stop').disabled=true;
 }
-
-function stopAll() {
-  stopFlag = true;
-  document.getElementById('btn-stop').disabled = true;
-  document.getElementById('progress-label').textContent = 'Stopping…';
-}
-
+function stopAll() { stopFlag=true; document.getElementById('btn-stop').disabled=true; document.getElementById('progress-label').textContent='Stopping…'; }
 function clearAll() {
   if (!confirm('Clear all data?')) return;
-  urls    = [];
-  results = {};
+  urls=[];results={};
   document.getElementById('main-section').classList.add('hidden');
   document.getElementById('drop-zone').classList.remove('hidden');
   document.getElementById('progress-wrap').classList.add('hidden');
@@ -933,246 +818,139 @@ function clearAll() {
 // ── CRO ───────────────────────────────────────────────────────────────────────────────────
 async function startCro(idx) {
   if (croRunning.has(idx)) return;
-  const u    = urls[idx];
-  const r    = results[u.url] || {};
-  const base = cfg.api();
+  const u=urls[idx], r=results[u.url]||{}, base=cfg.api();
   if (!r.html) { alert('Scrape this URL first'); return; }
   if (!base)   { alert('Set API URL'); return; }
-
-  croRunning.add(idx);
-  updateRow(idx);
-
+  croRunning.add(idx); updateRow(idx);
   try {
-    const resp = await fetch(base + '/cro', {
-      method:  'POST',
-      headers: {'Content-Type': 'application/json'},
-      body:    JSON.stringify({
-        html:         r.html,
-        dom_elements: (r.dom_states || {}).elements || [],
-        industry:     cfg.industry(),
-        url:          u.url,
-      }),
-    });
-    results[u.url].cro_audit = await resp.json();
-  } catch(e) {
-    results[u.url].cro_audit = {error: e.message};
-  }
-
-  croRunning.delete(idx);
-  updateRow(idx);
-  updateStats();
+    const resp=await fetch(base+'/cro',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({html:r.html,dom_elements:(r.dom_states||{}).elements||[],industry:cfg.industry(),url:u.url})});
+    results[u.url].cro_audit=await resp.json();
+  } catch(e) { results[u.url].cro_audit={error:e.message}; }
+  croRunning.delete(idx); updateRow(idx); updateStats();
 }
-
 async function runAllCro() {
-  const base = cfg.api();
+  const base=cfg.api();
   if (!base) { alert('Set API URL'); return; }
-
-  const pending = urls.map((_,i) => i).filter(i => {
-    const r = results[urls[i].url] || {};
-    return r.status === 'done' && r.html && (!r.cro_audit || r.cro_audit.error) && !croRunning.has(i);
-  });
+  const pending=urls.map((_,i)=>i).filter(i=>{const r=results[urls[i].url]||{};return r.status==='done'&&r.html&&(!r.cro_audit||r.cro_audit.error)&&!croRunning.has(i);});
   if (!pending.length) { alert('No scraped pages needing CRO'); return; }
-
-  const pool = [...pending];
-  const run  = async () => { while (pool.length) await startCro(pool.shift()); };
-  await Promise.all(Array.from({length: Math.min(cfg.workers(), pool.length)}, run));
+  const pool=[...pending];
+  await Promise.all(Array.from({length:Math.min(cfg.workers(),pool.length)},async()=>{while(pool.length)await startCro(pool.shift());}));
 }
 
 // ── Hunter.io ──────────────────────────────────────────────────────────────────────────────
 async function lookupHunter(idx) {
   if (hunterRunning.has(idx)) return;
-  const u    = urls[idx];
-  const base = cfg.api();
+  const u=urls[idx], base=cfg.api();
   if (!base) return;
-
   let domain;
-  try {
-    domain = new URL(u.url.startsWith('http') ? u.url : 'https://' + u.url).hostname.replace(/^www\./, '');
-  } catch(_) {
-    domain = u.url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0];
-  }
+  try { domain=new URL(u.url.startsWith('http')?u.url:'https://'+u.url).hostname.replace(/^www\./,''); }
+  catch(_) { domain=u.url.replace(/^https?:\/\/(www\.)?/,'').split('/')[0]; }
   if (!domain) return;
-
-  if (!results[u.url]) results[u.url] = {status: 'pending'};
-
-  hunterRunning.add(idx);
-  updateRow(idx);
-
+  if (!results[u.url]) results[u.url]={status:'pending'};
+  hunterRunning.add(idx); updateRow(idx);
   try {
-    const resp = await fetch(base + '/hunter', {
-      method:  'POST',
-      headers: {'Content-Type': 'application/json'},
-      body:    JSON.stringify({domain, api_key: cfg.hunter()}),
-    });
-    const data = await resp.json();
-    results[u.url].hunter_data = resp.ok ? data : {found: false, error: data.error || `HTTP ${resp.status}`};
-  } catch(e) {
-    results[u.url].hunter_data = {found: false, error: e.message};
-  }
-
-  hunterRunning.delete(idx);
-  updateRow(idx);
-  updateStats();
+    const resp=await fetch(base+'/hunter',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({domain,api_key:cfg.hunter()})});
+    const data=await resp.json();
+    results[u.url].hunter_data=resp.ok?data:{found:false,error:data.error||`HTTP ${resp.status}`};
+  } catch(e) { results[u.url].hunter_data={found:false,error:e.message}; }
+  hunterRunning.delete(idx); updateRow(idx); updateStats();
 }
-
 async function runAllHunter() {
-  const base = cfg.api();
+  const base=cfg.api();
   if (!base) { alert('Set API URL'); return; }
-
-  const pending = urls.map((_,i) => i).filter(i => {
-    const r = results[urls[i].url] || {};
-    return r.status === 'done' && (!r.hunter_data || r.hunter_data.error) && !hunterRunning.has(i);
-  });
+  const pending=urls.map((_,i)=>i).filter(i=>{const r=results[urls[i].url]||{};return r.status==='done'&&(!r.hunter_data||r.hunter_data.error)&&!hunterRunning.has(i);});
   if (!pending.length) { alert('No done rows needing DM lookup'); return; }
-
-  const pool = [...pending];
-  const run  = async () => { while (pool.length) await lookupHunter(pool.shift()); };
-  await Promise.all(Array.from({length: Math.min(2, pool.length)}, run));
+  const pool=[...pending];
+  await Promise.all(Array.from({length:Math.min(2,pool.length)},async()=>{while(pool.length)await lookupHunter(pool.shift());}));
 }
-
 async function auditDmSite(idx) {
-  const u = urls[idx];
-  const h = (results[u.url] || {}).hunter_data;
-  if (!h || !h.found) return;
-
-  const siteUrl = h.company_website || ('https://' + h.domain);
-  let targetIdx = urls.findIndex(x => x.url === siteUrl);
-  if (targetIdx < 0) {
-    urls.push({url: siteUrl, name: h.company_name || h.domain});
-    results[siteUrl] = {status: 'pending'};
-    targetIdx = urls.length - 1;
-    renderTable();
-  }
-
-  const row = document.getElementById(`row-${targetIdx}`);
-  if (row) row.scrollIntoView({behavior: 'smooth', block: 'center'});
-  await runOne(targetIdx);
-  updateStats();
+  const u=urls[idx], h=(results[u.url]||{}).hunter_data;
+  if (!h||!h.found) return;
+  const siteUrl=h.company_website||('https://'+h.domain);
+  let ti=urls.findIndex(x=>x.url===siteUrl);
+  if (ti<0) { urls.push({url:siteUrl,name:h.company_name||h.domain}); results[siteUrl]={status:'pending'}; ti=urls.length-1; renderTable(); }
+  const row=document.getElementById(`row-${ti}`);
+  if (row) row.scrollIntoView({behavior:'smooth',block:'center'});
+  await runOne(ti); updateStats();
 }
 
-// ── Select helpers ────────────────────────────────────────────────────────────────────────────────
-function selectAll()  { document.querySelectorAll('.url-cb').forEach(cb => cb.checked = true); }
-function selectNone() { document.querySelectorAll('.url-cb').forEach(cb => cb.checked = false); }
-function toggleAll(master) { document.querySelectorAll('.url-cb').forEach(cb => cb.checked = master.checked); }
-
-// ── Downloads ───────────────────────────────────────────────────────────────────────────────
+// ── Select / download helpers ────────────────────────────────────────────────────────────────────
+function selectAll()  { document.querySelectorAll('.url-cb').forEach(cb=>cb.checked=true); }
+function selectNone() { document.querySelectorAll('.url-cb').forEach(cb=>cb.checked=false); }
+function toggleAll(m) { document.querySelectorAll('.url-cb').forEach(cb=>cb.checked=m.checked); }
 function dlContact(idx) {
-  const r = results[urls[idx].url] || {};
-  const h = r.hunter_data;
-  if (!h || !h.found) return;
-  const rows = [['Company','Name','Email','Position','Seniority','Department','LinkedIn','Phone','Score']];
-  for (const c of (h.top_contacts || [])) {
-    rows.push([h.company_name||h.domain||'', c.name, c.email, c.position,
-               c.seniority, c.department, c.linkedin, c.phone, c.score]);
-  }
-  _dl(rows.map(r => r.map(v => `"${(v||'').toString().replace(/"/g,'""')}"`).join(',')).join('\n'),
-      `${safe(urls[idx])}_contacts.csv`, 'text/csv');
+  const r=results[urls[idx].url]||{}, h=r.hunter_data;
+  if (!h||!h.found) return;
+  const rows=[['Company','Name','Email','Position','Seniority','Department','LinkedIn','Phone','Score']];
+  for (const c of (h.top_contacts||[])) rows.push([h.company_name||h.domain||'',c.name,c.email,c.position,c.seniority,c.department,c.linkedin,c.phone,c.score]);
+  _dl(rows.map(r=>r.map(v=>`"${(v||'').toString().replace(/"/g,'""')}"`).join(',')).join('\n'), `${safe(urls[idx])}_contacts.csv`,'text/csv');
 }
-
 function downloadAll() {
-  const tasks = [];
-  urls.forEach((u, i) => {
-    const r = results[u.url];
-    if (!r || r.status !== 'done') return;
-    if (r.cro_audit && !r.cro_audit.error) tasks.push(() =>
-      _dl(JSON.stringify(r.cro_audit, null, 2), `${safe(u)}_cro.json`, 'application/json'));
-    if (r.hunter_data && r.hunter_data.found) tasks.push(() => dlContact(i));
+  const tasks=[];
+  urls.forEach((u,i)=>{ const r=results[u.url]; if(!r||r.status!=='done') return;
+    if(r.cro_audit&&!r.cro_audit.error) tasks.push(()=>_dl(JSON.stringify(r.cro_audit,null,2),`${safe(u)}_cro.json`,'application/json'));
+    if(r.hunter_data&&r.hunter_data.found) tasks.push(()=>dlContact(i));
   });
   if (!tasks.length) { alert('No completed results to download'); return; }
-  tasks.forEach((fn, i) => setTimeout(fn, i * 80));
+  tasks.forEach((fn,i)=>setTimeout(fn,i*80));
 }
-
 function _dl(content, filename, type) {
-  const a = Object.assign(document.createElement('a'), {
-    href:     URL.createObjectURL(new Blob([content], {type})),
-    download: filename,
-  });
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  const a=Object.assign(document.createElement('a'),{href:URL.createObjectURL(new Blob([content],{type})),download:filename});
+  a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1000);
 }
-
 function safe(u) { return (u.name||u.url).replace(/[^a-zA-Z0-9._-]/g,'_').slice(0,60); }
 function esc(s)  { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
 // ── CRO Modal ──────────────────────────────────────────────────────────────────────────────────
 function showCroModal(idx) {
-  const u   = urls[idx];
-  const r   = results[u.url] || {};
-  const cro = r.cro_audit;
-  if (!cro || cro.error) return;
-
-  document.getElementById('cro-modal-title').textContent = `CRO — ${u.name||u.url}`;
-  const m = cro.meta || {};
-  document.getElementById('cro-modal-meta').textContent =
-    `${m.site_type||m.industry||'—'} · ${(m.generated_at||'').slice(0,19).replace('T',' ')}`;
-
-  const cs = cro.client_summary || {};
-  const s  = cro.summary        || {};
-  const h  = cs.high   || s.confirmed_high   || 0;
-  const me = cs.medium || s.confirmed_medium || 0;
-  const l  = cs.low    || 0;
-  document.getElementById('cro-modal-summary').innerHTML = [
-    h  ? `<span class="badge badge-red text-sm px-2 py-1">${h} High</span>`       : '',
-    me ? `<span class="badge badge-yellow text-sm px-2 py-1">${me} Medium</span>` : '',
-    l  ? `<span class="badge badge-slate text-sm px-2 py-1">${l} Low</span>`      : '',
-    (!h && !me && !l) ? `<span class="badge badge-green text-sm px-2 py-1">✓ No issues</span>` : '',
+  const u=urls[idx], r=results[u.url]||{}, cro=r.cro_audit;
+  if (!cro||cro.error) return;
+  document.getElementById('cro-modal-title').textContent=`CRO — ${u.name||u.url}`;
+  const m=cro.meta||{};
+  document.getElementById('cro-modal-meta').textContent=`${m.site_type||m.industry||'—'} · ${(m.generated_at||'').slice(0,19).replace('T',' ')}`;
+  const cs=cro.client_summary||{}, s=cro.summary||{};
+  const h=cs.high||s.confirmed_high||0, me=cs.medium||s.confirmed_medium||0, l=cs.low||0;
+  document.getElementById('cro-modal-summary').innerHTML=[
+    h?`<span class="badge badge-red text-sm px-2 py-1">${h} High</span>`:'',
+    me?`<span class="badge badge-yellow text-sm px-2 py-1">${me} Medium</span>`:'',
+    l?`<span class="badge badge-slate text-sm px-2 py-1">${l} Low</span>`:'',
+    (!h&&!me&&!l)?`<span class="badge badge-green text-sm px-2 py-1">✓ No issues</span>`:'',
   ].join('');
-
-  const issues = cro.client_report || cro.issues || [];
-  document.getElementById('cro-modal-issues').innerHTML = issues.length
-    ? issues.map(issue => {
-        const sev = issue.severity || 'low';
-        const dec = issue.decision || 'confirmed';
-        const decBadge = dec === 'suppressed'            ? '<span class="badge badge-slate">suppressed</span>'
-                       : dec === 'verification_required' ? '<span class="badge badge-yellow">verify</span>'
-                       :                                   '<span class="badge badge-green">confirmed</span>';
-        return `<div class="issue-card ${sev}">
-          <div class="flex gap-2 items-start flex-wrap mb-1">
-            <span class="badge ${sev==='high'?'badge-red':sev==='medium'?'badge-yellow':'badge-slate'}">${sev.toUpperCase()}</span>
-            ${decBadge}
-            ${issue.origin==='ai_bot' ? '<span class="badge badge-slate">AI</span>' : ''}
-            <span class="font-semibold text-sm">${esc(issue.title||issue.id)}</span>
-          </div>
-          ${(issue.findings||[]).map(f=>`<div class="text-xs text-slate-300 mb-1">• ${esc(f)}</div>`).join('')}
-          ${(issue.evidence||[]).length ? `<div class="text-xs text-slate-500 mt-1 italic">${issue.evidence.map(e=>`↳ ${esc(e)}`).join('<br>')}</div>` : ''}
-          ${issue.screenshot_crop ? `<div class="mt-2 rounded overflow-hidden border border-slate-700"><img src="data:image/png;base64,${issue.screenshot_crop}" class="w-full" loading="lazy"/></div>` : ''}
-          ${issue.fix ? `<div class="text-xs text-indigo-300 mt-1 border-t border-slate-700 pt-1"><strong>Fix:</strong> ${esc(issue.fix)}</div>` : ''}
-          ${issue.revenue_signal ? `<div class="text-xs text-green-400 mt-1">${esc(issue.revenue_signal)}</div>` : ''}
-        </div>`;
+  const issues=cro.client_report||cro.issues||[];
+  document.getElementById('cro-modal-issues').innerHTML=issues.length
+    ?issues.map(issue=>{
+        const sev=issue.severity||'low', dec=issue.decision||'confirmed';
+        const decBadge=dec==='suppressed'?'<span class="badge badge-slate">suppressed</span>':dec==='verification_required'?'<span class="badge badge-yellow">verify</span>':'<span class="badge badge-green">confirmed</span>';
+        return `<div class="issue-card ${sev}"><div class="flex gap-2 items-start flex-wrap mb-1"><span class="badge ${sev==='high'?'badge-red':sev==='medium'?'badge-yellow':'badge-slate'}">${sev.toUpperCase()}</span>${decBadge}${issue.origin==='ai_bot'?'<span class="badge badge-slate">AI</span>':''}<span class="font-semibold text-sm">${esc(issue.title||issue.id)}</span></div>${(issue.findings||[]).map(f=>`<div class="text-xs text-slate-300 mb-1">• ${esc(f)}</div>`).join('')}${(issue.evidence||[]).length?`<div class="text-xs text-slate-500 mt-1 italic">${issue.evidence.map(e=>`↳ ${esc(e)}`).join('<br>')}</div>`:''}${issue.screenshot_crop?`<div class="mt-2 rounded overflow-hidden border border-slate-700"><img src="data:image/png;base64,${issue.screenshot_crop}" class="w-full" loading="lazy"/></div>`:''}${issue.fix?`<div class="text-xs text-indigo-300 mt-1 border-t border-slate-700 pt-1"><strong>Fix:</strong> ${esc(issue.fix)}</div>`:''}${issue.revenue_signal?`<div class="text-xs text-green-400 mt-1">${esc(issue.revenue_signal)}</div>`:''}</div>`;
       }).join('')
-    : '<div class="text-slate-400 text-sm">No confirmed issues.</div>';
-
-  document.getElementById('cro-modal').style.display = 'flex';
+    :'<div class="text-slate-400 text-sm">No confirmed issues.</div>';
+  document.getElementById('cro-modal').style.display='flex';
 }
-function closeCroModal() { document.getElementById('cro-modal').style.display = 'none'; }
+function closeCroModal() { document.getElementById('cro-modal').style.display='none'; }
 
 // ── Screenshot modal ───────────────────────────────────────────────────────────────────────────────
-let _ssIdx = null;
+let _ssIdx=null;
 function showScreenshot(idx) {
-  const r = results[urls[idx].url] || {};
+  const r=results[urls[idx].url]||{};
   if (!r.screenshot_b64) return;
-  _ssIdx = idx;
-  document.getElementById('ss-modal-title').textContent = urls[idx].url.replace(/https?:\/\//, '');
-  document.getElementById('ss-modal-img').src = 'data:image/png;base64,' + r.screenshot_b64;
-  document.getElementById('ss-modal').style.display = 'flex';
+  _ssIdx=idx;
+  document.getElementById('ss-modal-title').textContent=urls[idx].url.replace(/https?:\/\//, '');
+  document.getElementById('ss-modal-img').src='data:image/png;base64,'+r.screenshot_b64;
+  document.getElementById('ss-modal').style.display='flex';
 }
-function closeScreenshot() {
-  document.getElementById('ss-modal').style.display = 'none';
-  document.getElementById('ss-modal-img').src = '';
-}
+function closeScreenshot() { document.getElementById('ss-modal').style.display='none'; document.getElementById('ss-modal-img').src=''; }
 function dlScreenshot() {
-  if (_ssIdx === null) return;
-  const r = results[urls[_ssIdx].url] || {};
+  if (_ssIdx===null) return;
+  const r=results[urls[_ssIdx].url]||{};
   if (!r.screenshot_b64) return;
-  const a = document.createElement('a');
-  a.href     = 'data:image/png;base64,' + r.screenshot_b64;
-  a.download = urls[_ssIdx].url.replace(/https?:\/\//, '').replace(/[^a-z0-9]/gi, '_') + '.png';
+  const a=document.createElement('a');
+  a.href='data:image/png;base64,'+r.screenshot_b64;
+  a.download=urls[_ssIdx].url.replace(/https?:\///,'').replace(/[^a-z0-9]/gi,'_')+'.png';
   a.click();
 }
 
 // ── Init ───────────────────────────────────────────────────────────────────────────────────
-loadConfig();
-pingApi();
+loadConfig(); pingApi();
 </script>
 </body>
 </html>
