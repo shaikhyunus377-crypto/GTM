@@ -201,15 +201,15 @@
 </div>
 
 <script>
-// ── State ─────────────────────────────────────────────────────────────────────
+// ── State ─────────────────────────────────────────────────────────────────────────────
 let urls         = [];   // [{url, name}]
-let results      = {};   // url → {status, html, dom_states, screenshot_b64, cro_audit, hunter_data, error}
+let results      = {};   // url → {status, html, dom_states, screenshot_b64, screenshot_error, cro_audit, hunter_data, error}
 let running      = false;
 let stopFlag     = false;
 let croRunning   = new Set();
 let hunterRunning= new Set();
 
-// ── Config ────────────────────────────────────────────────────────────────────
+// ── Config ────────────────────────────────────────────────────────────────────────────
 const cfg = {
   api:      () => { let v = (document.getElementById('api-url').value || '').trim().replace(/\/$/, ''); if (v && !v.startsWith('http')) v = 'https://' + v; return v; },
   hunter:   () => document.getElementById('hunter-key').value.trim(),
@@ -230,7 +230,7 @@ function loadConfig() {
   document.getElementById('workers').value  = localStorage.getItem('gtm_workers')  || '2';
 }
 
-// ── API ping ──────────────────────────────────────────────────────────────────
+// ── API ping ──────────────────────────────────────────────────────────────────────────
 async function pingApi() {
   const base = cfg.api();
   const el   = document.getElementById('api-status');
@@ -248,7 +248,7 @@ async function pingApi() {
   }
 }
 
-// ── File handling ─────────────────────────────────────────────────────────────
+// ── File handling ───────────────────────────────────────────────────────────────────────
 function handleDrop(e) {
   e.preventDefault();
   document.getElementById('drop-zone').classList.remove('over');
@@ -300,7 +300,7 @@ function parseRows(rows, filename) {
   updateStats();
 }
 
-// ── Table ─────────────────────────────────────────────────────────────────────
+// ── Table ─────────────────────────────────────────────────────────────────────────────
 function renderTable() {
   document.getElementById('table-body').innerHTML =
     urls.map((_, i) => rowHtml(i)).join('');
@@ -335,7 +335,7 @@ function dmCell(idx) {
   const h = r.hunter_data;
   if (hunterRunning.has(idx)) return '<span class="text-yellow-400 flex items-center gap-1"><span class="spinner"></span>Looking up…</span>';
   if (!h) return '<span class="text-slate-600">—</span>';
-  if (h.error) return `<span class="text-red-400 text-xs" title="${esc(h.error)}">⚠ ${esc(h.error.slice(0,35))}</span>`;
+  if (h.error) return `<span class="text-red-400 text-xs" title="${esc(h.error)">⚠ ${esc(h.error.slice(0,35))}</span>`;
   if (!h.found) return `<span class="text-slate-500 text-xs" title="Emails indexed: ${h.total??0}">No contacts (${h.total??0})</span>`;
   const c = h.top_contacts[0] || {};
   return `<div class="text-xs">
@@ -390,7 +390,7 @@ function actionsCell(idx) {
   if (st === 'pending' || st === 'error') {
     parts.push(`<button class="btn btn-primary btn-sm" onclick="runOne(${idx})">▶ Run</button>`);
   } else if (st === 'done') {
-    parts.push(`<button class="btn btn-slate btn-sm" onclick="runOne(${idx})">↺</button>`);
+    parts.push(`<button class="btn btn-slate btn-sm" onclick="runOne(${idx})">&#x21BA;</button>`);
   }
 
   // Hunter DM button — visible when done and no successful DM yet (including error state for retry)
@@ -400,12 +400,14 @@ function actionsCell(idx) {
 
   // CRO button
   if (r.html && !croRunning.has(idx)) {
-    parts.push(`<button class="btn btn-purple btn-sm" onclick="startCro(${idx})">${r.cro_audit ? '↺ CRO' : '⚙ CRO'}</button>`);
+    parts.push(`<button class="btn btn-purple btn-sm" onclick="startCro(${idx})">${r.cro_audit ? '&#x21BA; CRO' : '⚙ CRO'}</button>`);
   }
 
-  // Screenshot button — show when screenshot captured
+  // Screenshot button — active when captured, dimmed with tooltip when it failed
   if (r.screenshot_b64) {
     parts.push(`<button class="btn btn-slate btn-sm" onclick="showScreenshot(${idx})">🖼 SS</button>`);
+  } else if (r.screenshot_error && st === 'done') {
+    parts.push(`<button class="btn btn-slate btn-sm" disabled title="Screenshot failed: ${esc(r.screenshot_error)}">🖼 SS</button>`);
   }
 
   // Download CSV of contacts
@@ -431,7 +433,7 @@ function updateRow(idx) {
   if (row) row.outerHTML = rowHtml(idx);
 }
 
-// ── Stats ─────────────────────────────────────────────────────────────────────
+// ── Stats ─────────────────────────────────────────────────────────────────────────────
 function updateStats() {
   const vals = Object.values(results);
   document.getElementById('st-total').textContent = urls.length;
@@ -441,7 +443,7 @@ function updateStats() {
   document.getElementById('st-cro').textContent   = vals.filter(r => r.cro_audit && !r.cro_audit.error).length;
 }
 
-// ── Run one URL ───────────────────────────────────────────────────────────────
+// ── Run one URL ────────────────────────────────────────────────────────────────────────
 async function runOne(idx) {
   const u    = urls[idx];
   const base = cfg.api();
@@ -472,7 +474,7 @@ async function runOne(idx) {
   }
 }
 
-// ── Run all ───────────────────────────────────────────────────────────────────
+// ── Run all ───────────────────────────────────────────────────────────────────────────
 async function runAll() {
   if (running) return;
   const base = cfg.api();
@@ -529,7 +531,7 @@ function clearAll() {
   document.getElementById('progress-wrap').classList.add('hidden');
 }
 
-// ── CRO ───────────────────────────────────────────────────────────────────────
+// ── CRO ──────────────────────────────────────────────────────────────────────────────
 async function startCro(idx) {
   if (croRunning.has(idx)) return;
   const u    = urls[idx];
@@ -577,7 +579,7 @@ async function runAllCro() {
   await Promise.all(Array.from({length: Math.min(cfg.workers(), pool.length)}, run));
 }
 
-// ── Hunter.io ─────────────────────────────────────────────────────────────────
+// ── Hunter.io ─────────────────────────────────────────────────────────────────────────
 async function lookupHunter(idx) {
   if (hunterRunning.has(idx)) return;
   const u    = urls[idx];
@@ -651,12 +653,12 @@ async function auditDmSite(idx) {
   updateStats();
 }
 
-// ── Select all / none ─────────────────────────────────────────────────────────
+// ── Select all / none ───────────────────────────────────────────────────────────────────────
 function selectAll()  { document.querySelectorAll('.url-cb').forEach(cb => cb.checked = true); }
 function selectNone() { document.querySelectorAll('.url-cb').forEach(cb => cb.checked = false); }
 function toggleAll(master) { document.querySelectorAll('.url-cb').forEach(cb => cb.checked = master.checked); }
 
-// ── Downloads ─────────────────────────────────────────────────────────────────
+// ── Downloads ───────────────────────────────────────────────────────────────────────────
 function dlContact(idx) {
   const r = results[urls[idx].url] || {};
   const h = r.hunter_data;
@@ -695,7 +697,7 @@ function _dl(content, filename, type) {
 function safe(u) { return (u.name||u.url).replace(/[^a-zA-Z0-9._-]/g,'_').slice(0,60); }
 function esc(s)  { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
-// ── CRO Modal ─────────────────────────────────────────────────────────────────
+// ── CRO Modal ──────────────────────────────────────────────────────────────────────────
 function showCroModal(idx) {
   const u   = urls[idx];
   const r   = results[u.url] || {};
@@ -747,7 +749,7 @@ function showCroModal(idx) {
 }
 function closeCroModal() { document.getElementById('cro-modal').style.display = 'none'; }
 
-// ── Screenshot modal ──────────────────────────────────────────────────────────
+// ── Screenshot modal ─────────────────────────────────────────────────────────────────────
 let _ssIdx = null;
 function showScreenshot(idx) {
   const r = results[urls[idx].url] || {};
@@ -771,7 +773,7 @@ function dlScreenshot() {
   a.click();
 }
 
-// ── Init ──────────────────────────────────────────────────────────────────────
+// ── Init ─────────────────────────────────────────────────────────────────────────────
 loadConfig();
 pingApi();
 </script>
