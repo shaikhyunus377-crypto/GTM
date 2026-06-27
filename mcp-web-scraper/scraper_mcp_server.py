@@ -30,7 +30,7 @@ from starlette.responses import JSONResponse
 from starlette.middleware.cors import CORSMiddleware
 import uvicorn
 
-# ── CRO modules ───────────────────────────────────────────────────────────────
+# ── CRO modules ─────────────────────────────────────────────────────────────────────────────
 THIS_DIR  = os.path.dirname(os.path.abspath(__file__))
 if THIS_DIR not in sys.path:
     sys.path.insert(0, THIS_DIR)
@@ -43,7 +43,7 @@ except ImportError as e:
     CRO_AVAILABLE = False
     _cro_import_err = str(e)
 
-# ── Config ────────────────────────────────────────────────────────────────────
+# ── Config ────────────────────────────────────────────────────────────────────────────
 SCRAPINGBEE_API_KEY = os.environ.get("SCRAPINGBEE_API_KEY", "")
 HUNTER_API_KEY      = os.environ.get("HUNTER_API_KEY", "")
 PORT                = int(os.environ.get("PORT", 8000))
@@ -57,8 +57,7 @@ if CRO_AVAILABLE:
 else:
     log.warning("CRO modules not available: %s", _cro_import_err if not CRO_AVAILABLE else "")
 
-# ── DOM / Scrape helpers ──────────────────────────────────────────────────────
-
+# ── DOM / Scrape helpers ────────────────────────────────────────────────────────────────────
 TAGS = ['a','button','h1','h2','h3','h4','h5','h6','img','input','form','label','section','header','footer']
 
 COORDINATE_JS = (
@@ -151,7 +150,15 @@ def scrape_sync(url: str, run_cro: bool = True, industry: str = "all") -> dict:
         return {"error": "scrapingbee package not installed"}
 
     client = ScrapingBeeClient(api_key=SCRAPINGBEE_API_KEY)
-    result = {"url": url, "html": None, "dom_states": None, "screenshot_b64": None, "cro_audit": None, "error": None}
+    result = {
+        "url": url,
+        "html": None,
+        "dom_states": None,
+        "screenshot_b64": None,
+        "screenshot_error": None,
+        "cro_audit": None,
+        "error": None,
+    }
 
     # Step 1 — rendered HTML + coordinate injection
     log.info("Scraping HTML: %s", url)
@@ -197,10 +204,19 @@ def scrape_sync(url: str, run_cro: bool = True, industry: str = "all") -> dict:
             "window_width":          "1440",
             "block_ads":             "true",
         })
-        if ss.status_code == 200 and len(ss.content) <= 1_500_000:
-            result["screenshot_b64"] = base64.b64encode(ss.content).decode()
+        if ss.status_code == 200:
+            size_kb = len(ss.content) // 1024
+            if len(ss.content) <= 1_500_000:
+                result["screenshot_b64"] = base64.b64encode(ss.content).decode()
+            else:
+                result["screenshot_error"] = f"Too large ({size_kb}KB > 1500KB)"
+                log.warning("Screenshot too large for %s: %dKB", url, size_kb)
+        else:
+            result["screenshot_error"] = f"ScrapingBee HTTP {ss.status_code}"
+            log.warning("Screenshot HTTP error for %s: %d", url, ss.status_code)
     except Exception as exc:
-        log.warning("Screenshot error: %s", exc)
+        result["screenshot_error"] = str(exc)
+        log.warning("Screenshot error for %s: %s", url, exc)
 
     # Step 3 — DOM states
     dom = build_dom_states(html, url, live_elements)
@@ -217,7 +233,8 @@ def scrape_sync(url: str, run_cro: bool = True, industry: str = "all") -> dict:
     return result
 
 
-# ── Request handlers ──────────────────────────────────────────────────────────
+# ── Request handlers ─────────────────────────────────────────────────────────────────────────
+from __future__ import annotations  # noqa: F811 — re-import guard
 
 async def healthcheck(request: Request):
     return JSONResponse({
@@ -351,7 +368,7 @@ async def handle_hunter(request: Request):
     })
 
 
-# ── App ───────────────────────────────────────────────────────────────────────
+# ── App ───────────────────────────────────────────────────────────────────────────────
 
 app = Starlette(routes=[
     Route("/",        healthcheck,    methods=["GET"]),
