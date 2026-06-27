@@ -104,6 +104,7 @@
   </label>
   <button class="btn btn-primary btn-sm" onclick="runAll()" id="btn-run">▶ Run All</button>
   <button class="btn btn-sm" style="background:#7c3aed;color:#fff" onclick="runAllCro()" id="btn-cro-all">⚙ Run All CRO</button>
+  <button class="btn btn-yellow btn-sm" onclick="runAllHunter()" id="btn-hunter-all">👤 Run All DM</button>
   <button class="btn btn-slate btn-sm" onclick="stopAll()" id="btn-stop" disabled>■ Stop</button>
   <button class="btn btn-green btn-sm" onclick="downloadAll()">↓ Download All</button>
   <button class="btn btn-slate btn-sm" onclick="clearAll()">✕ Clear</button>
@@ -153,6 +154,7 @@
 // ── State ───────────────────────────────────────────────────────────────────
 let urls       = [];   // [{url, name}]
 let results    = {};   // {url: {status, html, dom_states, screenshot_b64, cro_audit, hunter_data, error}}
+let hunterRunning = new Set();  // idx values currently fetching Hunter
 let running    = false;
 let stopFlag   = false;
 let croRunning = new Set();
@@ -210,11 +212,21 @@ function loadFile(input) {
     const ws   = wb.Sheets[wb.SheetNames[0]];
     const rows = XLSX.utils.sheet_to_json(ws, {header: 1, defval: ''});
     const newUrls = [];
+    const seen    = new Set();
     for (const row of rows) {
       for (const cell of row) {
         const v = String(cell || '').trim();
-        if (v.startsWith('http')) {
-          newUrls.push({url: v, name: v.replace(/^https?:\/\/(www\.)?/, '').split('/')[0]});
+        if (!v || v.length > 300) continue;
+        let url = '';
+        if (v.startsWith('http://') || v.startsWith('https://')) {
+          url = v;
+        } else if (/^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z]{2,})+$/.test(v)) {
+          // bare domain like "example.com" — prepend https://
+          url = 'https://' + v;
+        }
+        if (url && !seen.has(url)) {
+          seen.add(url);
+          newUrls.push({url, name: url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0]});
         }
       }
     }
@@ -265,7 +277,8 @@ function rowHtml(idx) {
     <td class="flex gap-1 flex-wrap">
       ${st === 'pending' || st === 'error' ? `<button class="btn btn-primary btn-sm" onclick="runOne(${idx})">▶ Run</button>` : ''}
       ${st === 'done' ? `<button class="btn btn-slate btn-sm" onclick="runOne(${idx})">↺ Re-run</button>` : ''}
-      ${st === 'done' && !r.hunter_data ? `<button class="btn btn-yellow btn-sm" onclick="lookupHunter(${idx})">👤 DM</button>` : ''}
+      ${st === 'done' && (!r.hunter_data || r.hunter_data.error) && !hunterRunning.has(idx) ? `<button class="btn btn-yellow btn-sm" onclick="lookupHunter(${idx})">👤 DM</button>` : ''}
+      ${hunterRunning.has(idx) ? `<button class="btn btn-yellow btn-sm" disabled><span class="spinner"></span>DM…</button>` : ''}
     </td>
   </tr>`;
 }
@@ -309,14 +322,43 @@ function contactCellHtml(idx) {
   const u = urls[idx];
   const r = results[u.url] || {};
   const h = r.hunter_data;
+
   if (!h) return '<span class="text-slate-600 text-xs">—</span>';
-  if (h.error)  return `<span class="text-red-400 text-xs" title="${h.error}">Error</span>`;
-  if (!h.found) return `<span class="text-slate-400 text-xs" title="Domain: ${h.domain || '?'} | Total found: ${h.total ?? 0}">No contacts</span>`;
-  const c = h.top_contacts[0] || {};
-  return `<div class="text-xs">
-    <div class="text-green-400 font-semibold">${c.name || 'Contact'}</div>
-    <div class="text-slate-400">${c.position || ''}</div>
-    <button class="btn btn-green btn-sm mt-1" onclick="dlContact(${idx})">↓ CSV</button>
+
+  if (h.error) {
+    return `<span class="text-red-400 text-xs" title="${escHtml(h.error)}">⚠ ${escHtml(h.error.slice(0,40))}</span>`;
+  }
+
+  if (!h.found) {
+    const tip = `Domain: ${h.domain || '?'} | Emails indexed: ${h.total ?? 0}`;
+    return `<span class="text-slate-400 text-xs" title="${escHtml(tip)}">No contacts found<br><span class="text-slate-600">(${h.total ?? 0} emails indexed)</span></span>`;
+  }
+
+  const top = h.top_contacts || [];
+  const c   = top[0] || {};
+  const company = h.company_name ? `<div class="text-slate-500">${escHtml(h.company_name)}</div>` : '';
+  const li  = c.linkedin ? `<a href="${escHtml(c.linkedin)}" target="_blank" class="text-indigo-400 hover:underline">LinkedIn ↗</a>` : '';
+  const ph  = c.phone    ? `<div class="text-slate-400">${escHtml(c.phone)}</div>` : '';
+
+  // Only show "Audit site" if the company_website wasn't already scraped
+  const siteUrl     = h.company_website || ('https://' + h.domain);
+  const alreadyDone = results[siteUrl] && results[siteUrl].status === 'done';
+  const auditBtn    = !alreadyDone
+    ? `<button class="btn btn-primary btn-sm mt-1" onclick="auditDmSite(${idx})" title="Scrape &amp; audit ${escHtml(siteUrl)}">⚙ Audit Site</button>`
+    : `<span class="text-green-400 text-xs">✓ audited</span>`;
+
+  return `<div class="text-xs space-y-0.5">
+    ${company}
+    <div class="text-green-400 font-semibold">${escHtml(c.name || 'Contact')}</div>
+    <div class="text-slate-300">${escHtml(c.position || '')}</div>
+    ${c.seniority ? `<div class="text-slate-500 capitalize">${escHtml(c.seniority)}</div>` : ''}
+    <div class="text-indigo-300">${escHtml(c.email || '')}</div>
+    ${ph}${li}
+    <div class="flex gap-1 mt-1 flex-wrap">
+      <button class="btn btn-green btn-sm" onclick="dlContact(${idx})">↓ CSV</button>
+      ${auditBtn}
+    </div>
+    ${top.length > 1 ? `<div class="text-slate-600 mt-1">+${top.length-1} more in CSV</div>` : ''}
   </div>`;
 }
 
@@ -468,29 +510,90 @@ async function runAllCro() {
 
 // ── Hunter.io ─────────────────────────────────────────────────────────────────
 async function lookupHunter(idx) {
+  if (hunterRunning.has(idx)) return;
   const u    = urls[idx];
   const base = apiBase();
   if (!base) { alert('Set API URL'); return; }
 
-  const key  = hunterKey();
-  const domain = new URL(u.url).hostname.replace('www.','');
+  // Ensure results entry exists
+  if (!results[u.url]) results[u.url] = {status: 'pending'};
 
+  // Parse domain safely
+  let domain;
+  try {
+    const parsed = new URL(u.url.startsWith('http') ? u.url : 'https://' + u.url);
+    domain = parsed.hostname.replace(/^www\./, '');
+  } catch(_) {
+    domain = u.url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0];
+  }
+  if (!domain) { alert('Cannot parse domain from: ' + u.url); return; }
+
+  hunterRunning.add(idx);
+  updateRow(idx);
+
+  const key = hunterKey();
   try {
     const resp = await fetch(base + '/hunter', {
-      method: 'POST',
+      method:  'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({domain, api_key: key}),
+      body:    JSON.stringify({domain, api_key: key}),
     });
     const data = await resp.json();
-    if (!resp.ok) {
-      results[u.url].hunter_data = {found: false, error: data.error || `HTTP ${resp.status}`};
-    } else {
-      results[u.url].hunter_data = data;
-    }
+    results[u.url].hunter_data = resp.ok
+      ? data
+      : {found: false, error: data.error || `HTTP ${resp.status}`};
   } catch(e) {
     results[u.url].hunter_data = {found: false, error: e.message};
   }
+
+  hunterRunning.delete(idx);
   updateRow(idx);
+}
+
+// After Hunter finds a DM, scrape + CRO their company site
+async function auditDmSite(idx) {
+  const u = urls[idx];
+  const h = (results[u.url] || {}).hunter_data;
+  if (!h || !h.found) return;
+
+  const siteUrl = h.company_website || ('https://' + h.domain);
+
+  // Add to urls list if not already there
+  const existing = urls.findIndex(x => x.url === siteUrl);
+  let targetIdx;
+  if (existing >= 0) {
+    targetIdx = existing;
+  } else {
+    urls.push({url: siteUrl, name: h.company_name || h.domain});
+    results[siteUrl] = {status: 'pending'};
+    targetIdx = urls.length - 1;
+    renderTable();
+  }
+
+  // Scroll to row and run scrape+CRO
+  const row = document.getElementById(`row-${targetIdx}`);
+  if (row) row.scrollIntoView({behavior: 'smooth', block: 'center'});
+  await runOne(targetIdx);
+  updateStats();
+}
+
+// Run Hunter for every scraped-but-not-yet-DM'd URL
+async function runAllHunter() {
+  const base = apiBase();
+  if (!base) { alert('Set API URL'); return; }
+
+  const pending = urls.map((_,i) => i).filter(i => {
+    const r = results[urls[i].url] || {};
+    return r.status === 'done' && !r.hunter_data && !hunterRunning.has(i);
+  });
+
+  if (!pending.length) { alert('No completed rows without Hunter data found'); return; }
+
+  const pool = [...pending];
+  async function worker() {
+    while (pool.length) await lookupHunter(pool.shift());
+  }
+  await Promise.all(Array.from({length: Math.min(2, pool.length)}, worker));
 }
 
 // ── Downloads ─────────────────────────────────────────────────────────────────
@@ -528,9 +631,13 @@ function dlContact(idx) {
   const r = results[urls[idx].url] || {};
   const h = r.hunter_data;
   if (!h || !h.found) return;
-  const rows = [['Name','Email','Position','Score']];
+  const rows = [['Company','Name','Email','Position','Seniority','Department','LinkedIn','Phone','Score']];
   for (const c of (h.top_contacts || [])) {
-    rows.push([c.name, c.email, c.position, c.score]);
+    rows.push([
+      h.company_name || h.domain || '',
+      c.name, c.email, c.position, c.seniority,
+      c.department, c.linkedin, c.phone, c.score,
+    ]);
   }
   const csv = rows.map(r => r.map(v => `"${(v||'').toString().replace(/"/g,'""')}"`).join(',')).join('\n');
   _download(csv, `${safeFilename(urls[idx])}_contacts.csv`, 'text/csv');
@@ -650,6 +757,11 @@ function toggleInternalCro(idx) {
 
 function closeCroModal() {
   document.getElementById('cro-modal').style.display = 'none';
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function escHtml(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────

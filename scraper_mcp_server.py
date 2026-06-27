@@ -289,16 +289,33 @@ async def handle_hunter(request: Request):
         return JSONResponse({"error": "Hunter.io API key required (set HUNTER_API_KEY env var or pass api_key in body)"}, status_code=400)
 
     import urllib.request
-    hunter_url = f"https://api.hunter.io/v2/domain-search?domain={domain}&api_key={api_key}&limit=10"
+    hunter_url = f"https://api.hunter.io/v2/domain-search?domain={domain}&api_key={api_key}&limit=20"
     try:
-        with urllib.request.urlopen(hunter_url, timeout=15) as r:
+        with urllib.request.urlopen(hunter_url, timeout=20) as r:
             data = json.loads(r.read())
     except Exception as exc:
         return JSONResponse({"error": f"Hunter.io request failed: {exc}"}, status_code=502)
 
-    emails = data.get("data", {}).get("emails", [])
-    SENIORITY_SCORE = {"director": 5, "c_suite": 5, "vp": 4, "manager": 3, "senior": 2}
-    TITLE_KEYWORDS  = ["owner","founder","ceo","president","director","vp","marketing","growth","sales"]
+    hunter_data = data.get("data", {})
+    emails      = hunter_data.get("emails", [])
+    organization = hunter_data.get("organization", "") or ""
+    company_website = f"https://{domain}"
+
+    # Hunter seniority field values: junior, senior, executive, director, manager
+    # "executive" = C-suite (CEO/CTO/CFO). "c_suite" is NOT a Hunter value.
+    SENIORITY_SCORE = {
+        "executive": 6,   # CEO, CTO, CFO, CMO
+        "director":  5,
+        "manager":   3,
+        "senior":    2,
+        "junior":    0,
+    }
+    TITLE_KEYWORDS = [
+        "owner", "founder", "ceo", "cto", "cfo", "cmo", "coo",
+        "president", "director", "vp", "vice president",
+        "marketing", "growth", "sales", "business development",
+        "partner", "principal",
+    ]
 
     def score(e):
         s = SENIORITY_SCORE.get((e.get("seniority") or "").lower(), 0)
@@ -306,19 +323,28 @@ async def handle_hunter(request: Request):
         s += sum(2 for kw in TITLE_KEYWORDS if kw in t)
         return s
 
-    ranked  = sorted(emails, key=score, reverse=True)
-    top     = ranked[:3]
+    ranked = sorted(emails, key=score, reverse=True)
+    top    = ranked[:5]  # return top 5 so frontend can show all options
 
     return JSONResponse({
-        "found":      bool(top),
-        "domain":     domain,
-        "total":      len(emails),
+        "found":           bool(top),
+        "domain":          domain,
+        "company_name":    organization,
+        "company_website": company_website,
+        "total":           len(emails),
         "top_contacts": [
             {
-                "email":    e.get("value"),
-                "name":     f"{e.get('first_name','')} {e.get('last_name','')}".strip(),
-                "position": e.get("position"),
-                "score":    score(e),
+                "email":      e.get("value"),
+                "name":       f"{e.get('first_name', '')} {e.get('last_name', '')}".strip(),
+                "first_name": e.get("first_name", ""),
+                "last_name":  e.get("last_name", ""),
+                "position":   e.get("position") or "",
+                "seniority":  e.get("seniority") or "",
+                "department": e.get("department") or "",
+                "linkedin":   e.get("linkedin") or "",
+                "phone":      e.get("phone_number") or "",
+                "confidence": e.get("confidence", 0),
+                "score":      score(e),
             }
             for e in top
         ],
@@ -341,6 +367,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+web = app  # alias for nixpacks/uvicorn auto-detection
+
 if __name__ == "__main__":
     log.info("Starting GTM Scraper API v%s on port %d", SERVER_VERSION, PORT)
-    uvicorn.run(app, host="0.0.0.0", port=PORT)
+    uvicorn.run("scraper_mcp_server:web", host="0.0.0.0", port=PORT, reload=False)
