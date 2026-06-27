@@ -341,6 +341,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+web = app  # alias for nixpacks/uvicorn auto-detection
+
 if __name__ == "__main__":
     log.info("Starting GTM Scraper API v%s on port %d", SERVER_VERSION, PORT)
-    uvicorn.run(app, host="0.0.0.0", port=PORT)
+    uvicorn.run("scraper_mcp_server:web", host="0.0.0.0", port=PORT, reload=False)

@@ -2,7 +2,7 @@
 builder = "nixpacks"
 
 [deploy]
-startCommand = "python scraper_mcp_server.py"
+startCommand = "uvicorn scraper_mcp_server:web --host 0.0.0.0 --port $PORT"
 healthcheckPath = "/"
 healthcheckTimeout = 30
 restartPolicyType = "on_failure"
