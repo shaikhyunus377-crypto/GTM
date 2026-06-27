@@ -1,57 +1,74 @@
 """
 Bot — AI CRO Analyst (GPT-4o-mini)
-Analyzes hero CTA quality, value proposition, urgency, offer clarity,
-and social proof placement using semantic understanding.
+Returns a LIST of atomic issues, each independently scoreable by Wolf.
 
-Only fires when OPENAI_API_KEY is set. Falls back gracefully if not.
-Returns 0–3 specific, high-confidence findings. Never returns vague issues.
+Design principles:
+- Each finding is one specific, verifiable observation
+- Evidence must quote actual page content (CTAs detected, headline text, etc.)
+- Confidence is calibrated per finding type — subjective CRO never > 85
+- Finding IDs are stable slugs so Wolf can evaluate them individually
+- No key is set without concrete grounding in the extracted page context
 """
 from __future__ import annotations
 import json
 import os
-import re
-from .base import AuditParser, dom_y, dom_visible, above_fold
+from .base import AuditParser, dom_y, dom_visible
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 
-# Absolute minimum evidence threshold — if GPT returns fewer than 2 tokens
-# of justification, the finding is dropped.
-MIN_JUSTIFICATION_LEN = 20
+# Calibrated confidence ceilings by finding category
+CONFIDENCE_CEILING = {
+    "hero_value_proposition":   85,
+    "hero_primary_cta_missing": 80,
+    "hero_action_clarity":      65,  # most subjective
+    "offer_clarity":            80,
+    "social_proof_near_cta":    75,
+}
+DEFAULT_CONFIDENCE_CEILING = 75
 
 
 def _extract_page_context(p: AuditParser, dom_elements: list) -> dict:
-    """Pull the key signals GPT needs to reason about CRO quality."""
-    headings = p.headings if hasattr(p, "headings") else []
-
+    headings = getattr(p, "headings", [])
     h1 = next((h["text"] for h in headings if h.get("tag") == "h1"), "")
-    hero_headings = [h.get("text", "") for h in headings[:8]]
 
-    # Above-fold CTAs (first 900px)
+    # Above-fold CTAs — the raw signals the AI will cite in evidence
     fold_ctas = []
     for e in (dom_elements or []):
         if e.get("tag") in ("a", "button") and dom_visible(e):
             y = dom_y(e)
             if 0 < y <= 900:
                 text = (e.get("text") or "").strip()
-                if text and len(text) < 80:
+                if text and 1 < len(text) < 80:
                     fold_ctas.append({"tag": e.get("tag"), "text": text, "y": y})
 
-    # Unique visible CTA texts for label analysis
-    all_cta_texts = []
+    # First booking-intent CTA anywhere on page
+    booking_kw = ("book", "schedul", "appoint", "reserv", "consult", "get start",
+                  "sign up", "free trial", "call now", "get quote", "request",
+                  "buy", "order", "enroll", "register", "demo")
+    first_booking_cta = None
+    for e in sorted((dom_elements or []), key=lambda x: dom_y(x)):
+        if e.get("tag") in ("a", "button") and dom_visible(e) and dom_y(e) > 0:
+            text = (e.get("text") or "").lower()
+            if any(kw in text for kw in booking_kw):
+                first_booking_cta = {"text": (e.get("text") or "").strip(), "y": dom_y(e)}
+                break
+
+    # Unique visible CTA texts
+    seen = set()
+    all_ctas = []
     for e in (dom_elements or []):
         if e.get("tag") in ("a", "button") and dom_visible(e) and dom_y(e) > 0:
             text = (e.get("text") or "").strip()
-            if text and len(text) < 80:
-                all_cta_texts.append(text)
+            if text and len(text) < 80 and text not in seen:
+                seen.add(text)
+                all_ctas.append(text)
 
-    # Social proof keyword presence in raw HTML
-    social_signals = []
+    # Social proof keyword presence
     html_lower = getattr(p, "raw_html", "").lower()
-    for kw in ("review", "rating", "testimonial", "google", "stars", "5-star", "award", "certified"):
-        if kw in html_lower:
-            social_signals.append(kw)
+    social_found = [kw for kw in
+        ("review", "rating", "testimonial", "stars", "5-star", "award", "certified", "google")
+        if kw in html_lower]
 
-    # Schema @type(s)
     schema_types = []
     for raw in getattr(p, "schema_raw", []):
         try:
@@ -62,77 +79,80 @@ def _extract_page_context(p: AuditParser, dom_elements: list) -> dict:
         except Exception:
             pass
 
-    phone = getattr(p, "tel_hrefs", [])
-
     return {
-        "page_title":     getattr(p, "title_text", "").strip(),
-        "meta_desc":      getattr(p, "meta_desc", "").strip(),
-        "h1":             h1,
-        "hero_headings":  hero_headings,
-        "fold_ctas":      fold_ctas[:10],
-        "all_cta_sample": list(dict.fromkeys(all_cta_texts))[:15],
-        "social_signals": social_signals,
-        "schema_types":   schema_types,
-        "has_form":       bool(getattr(p, "forms", [])),
-        "has_phone":      bool(phone),
+        "page_title":         getattr(p, "title_text", "").strip(),
+        "meta_desc":          getattr(p, "meta_desc", "").strip(),
+        "h1":                 h1,
+        "hero_headings":      [h["text"] for h in headings[:6]],
+        "fold_ctas":          fold_ctas,               # with y-positions
+        "first_booking_cta":  first_booking_cta,       # None if absent
+        "all_cta_sample":     all_ctas[:20],
+        "social_proof_found": social_found,
+        "schema_types":       schema_types,
+        "has_form":           bool(getattr(p, "forms", [])),
+        "has_phone":          bool(getattr(p, "tel_hrefs", [])),
     }
 
 
-SYSTEM_PROMPT = """You are a senior CRO (Conversion Rate Optimisation) analyst.
-You audit landing pages for conversion problems that directly reduce revenue.
+SYSTEM_PROMPT = """You are a senior CRO analyst auditing a landing page for conversion friction.
 
-Rules:
-- Only report findings you are CERTAIN are problems, not speculative improvements
-- Each finding must name a SPECIFIC element or missing element found on this page
-- Do NOT flag things that might already exist but weren't extracted (e.g. do not guess)
-- Do NOT repeat what schema or other bots already detect
-- Maximum 3 findings total; fewer is better if evidence is weak
-- Each finding severity: "high" | "medium" | "low"
-- Each finding must have a concrete fix a developer can implement in hours
+STRICT RULES — violate any of these and your output is rejected:
+1. Every finding's `evidence` array MUST quote actual text from the page_context I provide.
+   - BAD:  "No primary CTA detected"
+   - GOOD: "Above-fold CTAs detected: 'Explore Services' (a, y=420), 'View All' (a, y=510). No booking-intent CTA."
+2. `confidence` must match the finding type:
+   - Missing booking CTA (verifiable): 70–80
+   - Weak value proposition (subjective): 75–85
+   - Generic CTA label (contextual): 50–65
+   - Social proof proximity (layout-dependent): 60–75
+3. Each finding must be a SEPARATE atomic issue with a stable snake_case `id`.
+4. Return ONLY findings you are highly confident are real problems on THIS page.
+5. If the page has a booking CTA above fold, do NOT flag hero_primary_cta_missing.
+6. `fix` must be specific to what's detected — no generic advice.
+7. Maximum 4 findings. Fewer is better.
+8. `finding` must explain WHY this hurts conversions, not just describe the absence.
 
-Respond ONLY with valid JSON, no markdown, no commentary:
+Valid finding IDs (use only these):
+- hero_primary_cta_missing    (no booking/scheduling CTA in first 900px)
+- hero_value_proposition      (hero doesn't answer why this business over competitors)
+- hero_action_clarity         (CTA labels encourage exploration not conversion)
+- offer_clarity               (no specific offer, discount, or incentive visible)
+- social_proof_near_cta       (reviews/ratings not proximate to primary CTA)
+
+Respond ONLY with valid JSON:
 {
   "findings": [
     {
-      "id": "snake_case_unique_id",
-      "title": "One-line title",
+      "id": "hero_primary_cta_missing",
+      "title": "Short one-line title",
       "severity": "high|medium|low",
-      "finding": "One paragraph explaining the specific problem with evidence from the page",
-      "fix": "Specific actionable fix",
-      "revenue_signal": "One stat or principle (optional, leave empty string if unsure)"
+      "confidence": 75,
+      "finding": "One paragraph: what's missing and why it reduces conversions",
+      "evidence": ["Quote from page: exact CTA text detected at y=Npx", "..."],
+      "fix": "Specific fix referencing what was detected",
+      "revenue_signal": "One supporting stat — leave empty string if unsure"
     }
   ]
-}
-"""
+}"""
 
-USER_PROMPT_TEMPLATE = """Audit this page for CRO problems. Focus on:
-1. Hero CTA — is the primary action clear, urgent, and benefit-led?
-2. Value proposition — does the hero communicate WHY this business over competitors?
-3. Offer clarity — is there a specific offer, price, or incentive visible?
-4. CTA quality — do above-fold CTAs use generic labels like "Submit" or "Click Here"?
-5. Social proof proximity — is there ANY social proof near the primary CTA?
+USER_PROMPT = """Audit this page. Use ONLY the data below as evidence — do not assume anything not in this context.
 
-Page data:
-{context}
-
-Respond only if you find genuine, specific problems. If the page looks good, return {{"findings": []}}.
-"""
+{context}"""
 
 
 def _call_openai(context: dict) -> list[dict]:
-    """Call GPT-4o-mini and return list of finding dicts."""
     try:
         import urllib.request
-        import urllib.error
 
-        context_str = json.dumps(context, indent=2)
         payload = json.dumps({
             "model": "gpt-4o-mini",
             "temperature": 0.1,
-            "max_tokens": 800,
+            "max_tokens": 1000,
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user",   "content": USER_PROMPT_TEMPLATE.format(context=context_str)},
+                {"role": "user",   "content": USER_PROMPT.format(
+                    context=json.dumps(context, indent=2)
+                )},
             ],
             "response_format": {"type": "json_object"},
         }).encode()
@@ -146,66 +166,65 @@ def _call_openai(context: dict) -> list[dict]:
             },
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=20) as resp:
+        with urllib.request.urlopen(req, timeout=25) as resp:
             body = json.loads(resp.read())
 
         content = body["choices"][0]["message"]["content"]
-        parsed  = json.loads(content)
-        return parsed.get("findings", [])
+        return json.loads(content).get("findings", [])
 
     except Exception as exc:
         return [{"_error": str(exc)}]
 
 
-def run(p: AuditParser | None = None, dom_elements: list | None = None) -> dict | None:
+def run(p: AuditParser | None = None, dom_elements: list | None = None) -> list[dict] | None:
+    """Returns a LIST of atomic issue dicts, or None if nothing to report."""
     if not OPENAI_API_KEY:
-        return None  # Silently skip — no key configured
+        return None
 
     ctx = _extract_page_context(p or AuditParser(), dom_elements or [])
+    raw = _call_openai(ctx)
 
-    raw_findings = _call_openai(ctx)
-    if not raw_findings:
-        return None
-
-    # Filter out any error entries or findings with no real justification
-    valid = [
-        f for f in raw_findings
-        if isinstance(f, dict)
-        and "id" in f
-        and "title" in f
-        and len(f.get("finding", "")) >= MIN_JUSTIFICATION_LEN
-        and "_error" not in f
-    ]
-
-    if not valid:
-        return None
-
-    # Use highest severity from the set
-    sev_rank = {"high": 0, "medium": 1, "low": 2}
-    valid.sort(key=lambda f: sev_rank.get(f.get("severity", "low"), 2))
-    top_sev = valid[0].get("severity", "medium")
-
-    # Build findings list and evidence
-    findings_text = [f["finding"] for f in valid]
-    evidence      = [f["title"]   for f in valid]
-    fix_texts     = [f["fix"]     for f in valid if f.get("fix")]
-    revenue_sigs  = [f["revenue_signal"] for f in valid if f.get("revenue_signal")]
-
-    return {
-        "id":               "ai_cro_analysis",
-        "title":            "AI CRO analysis identified conversion friction",
-        "severity":         top_sev,
-        "confidence":       "confirmed",
-        "confidence_score": 80,
-        "cro_impact":       "Hero conversion rate + first-impression quality",
-        "revenue_signal":   revenue_sigs[0] if revenue_sigs else "",
-        "detection_source": "ai",
-        "industry_tags":    ["all"],
-        "fix_effort":       "hours",
-        "origin":           "ai_bot",
-        "affected_elements": [],
-        "findings":         findings_text,
-        "fix":              " | ".join(fix_texts),
-        "evidence":         evidence,
-        "ai_findings":      valid,  # full structured list for modal rendering
+    valid_ids = {
+        "hero_primary_cta_missing",
+        "hero_value_proposition",
+        "hero_action_clarity",
+        "offer_clarity",
+        "social_proof_near_cta",
     }
+
+    issues = []
+    for f in raw:
+        if not isinstance(f, dict) or "_error" in f:
+            continue
+        if f.get("id") not in valid_ids:
+            continue
+        if not f.get("title") or not f.get("finding"):
+            continue
+        evidence = f.get("evidence", [])
+        # Reject if evidence is just restating the conclusion (< 30 chars total)
+        if sum(len(e) for e in evidence) < 30:
+            continue
+
+        finding_id = f["id"]
+        ceiling    = CONFIDENCE_CEILING.get(finding_id, DEFAULT_CONFIDENCE_CEILING)
+        confidence = min(int(f.get("confidence", 70)), ceiling)
+
+        issues.append({
+            "id":               finding_id,
+            "title":            f["title"],
+            "severity":         f.get("severity", "medium"),
+            "confidence":       "confirmed",
+            "confidence_score": confidence,
+            "cro_impact":       "Hero conversion rate",
+            "revenue_signal":   f.get("revenue_signal", ""),
+            "detection_source": "ai",
+            "industry_tags":    ["all"],
+            "fix_effort":       "hours",
+            "origin":           "ai_bot",
+            "affected_elements": [],
+            "findings":         [f["finding"]],
+            "fix":              f.get("fix", ""),
+            "evidence":         evidence,
+        })
+
+    return issues if issues else None

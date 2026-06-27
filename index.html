@@ -613,32 +613,16 @@ function showCroModal(idx) {
         ? '<span class="badge badge-yellow">verify</span>'
         : '<span class="badge badge-green">confirmed</span>';
 
-    // AI bot: render each sub-finding separately for clarity
-    if (isAi && Array.isArray(issue.ai_findings) && issue.ai_findings.length) {
-      return issue.ai_findings.map(f => {
-        const fsev = f.severity || sev;
-        return `<div class="issue-card ${fsev}">
-          <div class="flex gap-2 items-start flex-wrap mb-1">
-            <span class="badge ${fsev === 'high' ? 'badge-red' : fsev === 'medium' ? 'badge-yellow' : 'badge-slate'}">${fsev.toUpperCase()}</span>
-            <span class="badge badge-green">confirmed</span>
-            <span class="badge badge-slate text-xs">AI</span>
-            <span class="font-semibold text-sm">${f.title || f.id}</span>
-          </div>
-          <div class="text-xs text-slate-300 mb-1">${f.finding || ''}</div>
-          ${f.fix ? `<div class="text-xs text-indigo-300 mt-1 border-t border-slate-700 pt-1"><strong>Fix:</strong> ${f.fix}</div>` : ''}
-          ${f.revenue_signal ? `<div class="text-xs text-green-400 mt-1">${f.revenue_signal}</div>` : ''}
-        </div>`;
-      }).join('');
-    }
-
     return `<div class="issue-card ${sev}${isGap ? ' gap' : ''}">
       <div class="flex gap-2 items-start flex-wrap mb-1">
         <span class="badge ${sev === 'high' ? 'badge-red' : sev === 'medium' ? 'badge-yellow' : 'badge-slate'}">${sev.toUpperCase()}</span>
         ${decBadge}
         ${isGap ? '<span class="badge badge-slate text-xs">internal</span>' : ''}
+        ${isAi  ? '<span class="badge badge-slate text-xs">AI</span>' : ''}
         <span class="font-semibold text-sm">${issue.title || issue.id}</span>
       </div>
       ${(issue.findings||[]).map(f => `<div class="text-xs text-slate-300 mb-1">• ${f}</div>`).join('')}
+      ${(issue.evidence||[]).length ? `<div class="text-xs text-slate-500 mt-1 italic">${(issue.evidence||[]).map(e=>`↳ ${e}`).join('<br>')}</div>` : ''}
       ${issue.fix ? `<div class="text-xs text-indigo-300 mt-1 border-t border-slate-700 pt-1"><strong>Fix:</strong> ${issue.fix}</div>` : ''}
       ${issue.revenue_signal ? `<div class="text-xs text-green-400 mt-1">${issue.revenue_signal}</div>` : ''}
     </div>`;

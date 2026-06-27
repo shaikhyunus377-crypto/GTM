@@ -64,10 +64,14 @@ def run_audit(
     for bot in BOTS:
         try:
             result = bot.run(p=parser, dom_elements=dom_elements)
-            if result:
-                result.setdefault("origin", "bot")
-                result.setdefault("confidence_score", 80)
-                issues.append(result)
+            if not result:
+                continue
+            # Bots may return a single dict or a list of dicts
+            batch = result if isinstance(result, list) else [result]
+            for item in batch:
+                item.setdefault("origin", "bot")
+                item.setdefault("confidence_score", 80)
+                issues.append(item)
         except Exception as exc:
             errors.append({"bot": bot.__name__, "error": str(exc)})
 

@@ -548,6 +548,37 @@ def eval_mobile_tap_targets(issue: dict, ev: dict):
     issue["affected_elements"] = ev.get("small_samples", [])
 
 
+# ── AI finding evaluators ────────────────────────────────────────────────────
+# These pass through bot findings but enforce calibrated confidence ceilings
+# and downgrade to verification_required if evidence is thin.
+
+_AI_CONFIDENCE_CEILING = {
+    "hero_primary_cta_missing":  80,
+    "hero_value_proposition":    85,
+    "hero_action_clarity":       65,
+    "offer_clarity":             80,
+    "social_proof_near_cta":     75,
+}
+
+def eval_ai_finding(issue: dict, ev: dict):
+    """Wolf pass-through for AI findings: enforce ceiling, thin-evidence downgrade."""
+    finding_id = issue.get("id", "")
+    ceiling    = _AI_CONFIDENCE_CEILING.get(finding_id, 75)
+
+    # Clamp confidence to ceiling
+    score = min(issue.get("confidence_score", 70), ceiling)
+    issue["confidence_score"] = score
+
+    # If evidence array is all short strings, not enough to stand alone
+    evidence = issue.get("evidence", [])
+    evidence_chars = sum(len(e) for e in evidence)
+    if evidence_chars < 60:
+        flag_verify(issue, score, "ai_evidence_too_thin_to_confirm", [])
+        return
+
+    confirm(issue, score, f"ai_confirmed_{finding_id}", [])
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  GAP DETECTION
 # ─────────────────────────────────────────────────────────────────────────────
@@ -632,7 +663,12 @@ EVALUATOR_MAP = {
     "social_proof":      (eval_social_proof,      "social_ev"),
     "trust_signals":     (eval_trust_signals,     "trust_ev"),
     "mobile_tap_targets":(eval_mobile_tap_targets,"tap_ev"),
-    # ai_cro_analysis: no wolf eval needed — GPT already validated findings
+    # AI atomic findings — each evaluated independently with confidence ceiling
+    "hero_primary_cta_missing":  (eval_ai_finding, "fold_ev"),
+    "hero_value_proposition":    (eval_ai_finding, "fold_ev"),
+    "hero_action_clarity":       (eval_ai_finding, "fold_ev"),
+    "offer_clarity":             (eval_ai_finding, "fold_ev"),
+    "social_proof_near_cta":     (eval_ai_finding, "social_ev"),
 }
 
 
