@@ -171,7 +171,6 @@
   </div>
 </div>
 
-<!-- CRO Detail Modal -->
 <!-- Screenshot modal -->
 <div id="ss-modal" class="modal-bg" style="display:none" onclick="if(event.target===this)closeScreenshot()">
   <div class="modal-box" style="max-width:90vw;width:auto">
@@ -186,6 +185,7 @@
   </div>
 </div>
 
+<!-- CRO modal -->
 <div id="cro-modal" class="modal-bg" style="display:none" onclick="if(event.target===this)closeCroModal()">
   <div class="modal-box">
     <div class="flex justify-between items-start mb-4">
@@ -202,12 +202,12 @@
 
 <script>
 // ── State ─────────────────────────────────────────────────────────────────────────────
-let urls         = [];   // [{url, name}]
-let results      = {};   // url → {status, html, dom_states, screenshot_b64, screenshot_error, cro_audit, hunter_data, error}
-let running      = false;
-let stopFlag     = false;
-let croRunning   = new Set();
-let hunterRunning= new Set();
+let urls          = [];
+let results       = {};
+let running       = false;
+let stopFlag      = false;
+let croRunning    = new Set();
+let hunterRunning = new Set();
 
 // ── Config ────────────────────────────────────────────────────────────────────────────
 const cfg = {
@@ -224,13 +224,13 @@ function saveConfig() {
   localStorage.setItem('gtm_workers',  document.getElementById('workers').value);
 }
 function loadConfig() {
-  document.getElementById('api-url').value  = localStorage.getItem('gtm_api')      || '';
-  document.getElementById('hunter-key').value = localStorage.getItem('gtm_hunter') || '';
-  document.getElementById('industry').value = localStorage.getItem('gtm_industry') || 'all';
-  document.getElementById('workers').value  = localStorage.getItem('gtm_workers')  || '2';
+  document.getElementById('api-url').value    = localStorage.getItem('gtm_api')      || '';
+  document.getElementById('hunter-key').value = localStorage.getItem('gtm_hunter')   || '';
+  document.getElementById('industry').value   = localStorage.getItem('gtm_industry') || 'all';
+  document.getElementById('workers').value    = localStorage.getItem('gtm_workers')  || '2';
 }
 
-// ── API ping ──────────────────────────────────────────────────────────────────────────
+// ── API ping ─────────────────────────────────────────────────────────────────────────
 async function pingApi() {
   const base = cfg.api();
   const el   = document.getElementById('api-status');
@@ -248,7 +248,7 @@ async function pingApi() {
   }
 }
 
-// ── File handling ───────────────────────────────────────────────────────────────────────
+// ── File handling ─────────────────────────────────────────────────────────────────────
 function handleDrop(e) {
   e.preventDefault();
   document.getElementById('drop-zone').classList.remove('over');
@@ -302,8 +302,7 @@ function parseRows(rows, filename) {
 
 // ── Table ─────────────────────────────────────────────────────────────────────────────
 function renderTable() {
-  document.getElementById('table-body').innerHTML =
-    urls.map((_, i) => rowHtml(i)).join('');
+  document.getElementById('table-body').innerHTML = urls.map((_, i) => rowHtml(i)).join('');
 }
 
 function rowHtml(idx) {
@@ -335,7 +334,7 @@ function dmCell(idx) {
   const h = r.hunter_data;
   if (hunterRunning.has(idx)) return '<span class="text-yellow-400 flex items-center gap-1"><span class="spinner"></span>Looking up…</span>';
   if (!h) return '<span class="text-slate-600">—</span>';
-  if (h.error) return `<span class="text-red-400 text-xs" title="${esc(h.error)">⚠ ${esc(h.error.slice(0,35))}</span>`;
+  if (h.error) return `<span class="text-red-400 text-xs" title="${esc(h.error)}">⚠ ${esc(h.error.slice(0,35))}</span>`;
   if (!h.found) return `<span class="text-slate-500 text-xs" title="Emails indexed: ${h.total??0}">No contacts (${h.total??0})</span>`;
   const c = h.top_contacts[0] || {};
   return `<div class="text-xs">
@@ -386,36 +385,30 @@ function actionsCell(idx) {
   const h  = r.hunter_data;
   const parts = [];
 
-  // Scrape button
   if (st === 'pending' || st === 'error') {
     parts.push(`<button class="btn btn-primary btn-sm" onclick="runOne(${idx})">▶ Run</button>`);
   } else if (st === 'done') {
     parts.push(`<button class="btn btn-slate btn-sm" onclick="runOne(${idx})">&#x21BA;</button>`);
   }
 
-  // Hunter DM button — visible when done and no successful DM yet (including error state for retry)
   if (st === 'done' && (!h || h.error) && !hunterRunning.has(idx)) {
     parts.push(`<button class="btn btn-yellow btn-sm" onclick="lookupHunter(${idx})">👤 DM</button>`);
   }
 
-  // CRO button
   if (r.html && !croRunning.has(idx)) {
     parts.push(`<button class="btn btn-purple btn-sm" onclick="startCro(${idx})">${r.cro_audit ? '&#x21BA; CRO' : '⚙ CRO'}</button>`);
   }
 
-  // Screenshot button — active when captured, dimmed with tooltip when it failed
   if (r.screenshot_b64) {
     parts.push(`<button class="btn btn-slate btn-sm" onclick="showScreenshot(${idx})">🖼 SS</button>`);
   } else if (r.screenshot_error && st === 'done') {
     parts.push(`<button class="btn btn-slate btn-sm" disabled title="Screenshot failed: ${esc(r.screenshot_error)}">🖼 SS</button>`);
   }
 
-  // Download CSV of contacts
   if (h && h.found) {
     parts.push(`<button class="btn btn-green btn-sm" onclick="dlContact(${idx})">↓ CSV</button>`);
   }
 
-  // Audit DM's website if different from scraped URL
   if (h && h.found) {
     const siteUrl = h.company_website || ('https://' + h.domain);
     const sameDomain = siteUrl === urls[idx].url || siteUrl === urls[idx].url + '/';
@@ -443,7 +436,7 @@ function updateStats() {
   document.getElementById('st-cro').textContent   = vals.filter(r => r.cro_audit && !r.cro_audit.error).length;
 }
 
-// ── Run one URL ────────────────────────────────────────────────────────────────────────
+// ── Run one URL ──────────────────────────────────────────────────────────────────────
 async function runOne(idx) {
   const u    = urls[idx];
   const base = cfg.api();
@@ -468,13 +461,12 @@ async function runOne(idx) {
   updateRow(idx);
   updateStats();
 
-  // Auto-fetch Hunter DM after successful scrape (if key is set)
   if (results[u.url].status === 'done' && cfg.hunter()) {
-    lookupHunter(idx);  // fire-and-forget; updates row when done
+    lookupHunter(idx);
   }
 }
 
-// ── Run all ───────────────────────────────────────────────────────────────────────────
+// ── Run all ──────────────────────────────────────────────────────────────────────────
 async function runAll() {
   if (running) return;
   const base = cfg.api();
@@ -531,7 +523,7 @@ function clearAll() {
   document.getElementById('progress-wrap').classList.add('hidden');
 }
 
-// ── CRO ──────────────────────────────────────────────────────────────────────────────
+// ── CRO ─────────────────────────────────────────────────────────────────────────────
 async function startCro(idx) {
   if (croRunning.has(idx)) return;
   const u    = urls[idx];
@@ -579,14 +571,13 @@ async function runAllCro() {
   await Promise.all(Array.from({length: Math.min(cfg.workers(), pool.length)}, run));
 }
 
-// ── Hunter.io ─────────────────────────────────────────────────────────────────────────
+// ── Hunter.io ──────────────────────────────────────────────────────────────────────
 async function lookupHunter(idx) {
   if (hunterRunning.has(idx)) return;
   const u    = urls[idx];
   const base = cfg.api();
   if (!base) return;
 
-  // Parse domain safely
   let domain;
   try {
     domain = new URL(u.url.startsWith('http') ? u.url : 'https://' + u.url).hostname.replace(/^www\./, '');
@@ -632,7 +623,6 @@ async function runAllHunter() {
   await Promise.all(Array.from({length: Math.min(2, pool.length)}, run));
 }
 
-// After Hunter finds DM → add company site to queue and audit it
 async function auditDmSite(idx) {
   const u = urls[idx];
   const h = (results[u.url] || {}).hunter_data;
@@ -653,12 +643,12 @@ async function auditDmSite(idx) {
   updateStats();
 }
 
-// ── Select all / none ───────────────────────────────────────────────────────────────────────
+// ── Select helpers ───────────────────────────────────────────────────────────────────────
 function selectAll()  { document.querySelectorAll('.url-cb').forEach(cb => cb.checked = true); }
 function selectNone() { document.querySelectorAll('.url-cb').forEach(cb => cb.checked = false); }
 function toggleAll(master) { document.querySelectorAll('.url-cb').forEach(cb => cb.checked = master.checked); }
 
-// ── Downloads ───────────────────────────────────────────────────────────────────────────
+// ── Downloads ─────────────────────────────────────────────────────────────────────────
 function dlContact(idx) {
   const r = results[urls[idx].url] || {};
   const h = r.hunter_data;
@@ -697,7 +687,7 @@ function _dl(content, filename, type) {
 function safe(u) { return (u.name||u.url).replace(/[^a-zA-Z0-9._-]/g,'_').slice(0,60); }
 function esc(s)  { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
-// ── CRO Modal ──────────────────────────────────────────────────────────────────────────
+// ── CRO Modal ────────────────────────────────────────────────────────────────────────
 function showCroModal(idx) {
   const u   = urls[idx];
   const r   = results[u.url] || {};
@@ -705,7 +695,7 @@ function showCroModal(idx) {
   if (!cro || cro.error) return;
 
   document.getElementById('cro-modal-title').textContent = `CRO — ${u.name||u.url}`;
-  const m  = cro.meta || {};
+  const m = cro.meta || {};
   document.getElementById('cro-modal-meta').textContent =
     `${m.site_type||m.industry||'—'} · ${(m.generated_at||'').slice(0,19).replace('T',' ')}`;
 
@@ -715,9 +705,9 @@ function showCroModal(idx) {
   const me = cs.medium || s.confirmed_medium || 0;
   const l  = cs.low    || 0;
   document.getElementById('cro-modal-summary').innerHTML = [
-    h  ? `<span class="badge badge-red text-sm px-2 py-1">${h} High</span>`   : '',
+    h  ? `<span class="badge badge-red text-sm px-2 py-1">${h} High</span>`       : '',
     me ? `<span class="badge badge-yellow text-sm px-2 py-1">${me} Medium</span>` : '',
-    l  ? `<span class="badge badge-slate text-sm px-2 py-1">${l} Low</span>`  : '',
+    l  ? `<span class="badge badge-slate text-sm px-2 py-1">${l} Low</span>`      : '',
     (!h && !me && !l) ? `<span class="badge badge-green text-sm px-2 py-1">✓ No issues</span>` : '',
   ].join('');
 
@@ -726,21 +716,21 @@ function showCroModal(idx) {
     ? issues.map(issue => {
         const sev = issue.severity || 'low';
         const dec = issue.decision || 'confirmed';
-        const decBadge = dec === 'suppressed' ? '<span class="badge badge-slate">suppressed</span>'
-          : dec === 'verification_required'   ? '<span class="badge badge-yellow">verify</span>'
-          : '<span class="badge badge-green">confirmed</span>';
+        const decBadge = dec === 'suppressed'          ? '<span class="badge badge-slate">suppressed</span>'
+                       : dec === 'verification_required' ? '<span class="badge badge-yellow">verify</span>'
+                       : '<span class="badge badge-green">confirmed</span>';
         return `<div class="issue-card ${sev}">
           <div class="flex gap-2 items-start flex-wrap mb-1">
             <span class="badge ${sev==='high'?'badge-red':sev==='medium'?'badge-yellow':'badge-slate'}">${sev.toUpperCase()}</span>
             ${decBadge}
-            ${issue.origin==='ai_bot'?'<span class="badge badge-slate">AI</span>':''}
+            ${issue.origin==='ai_bot' ? '<span class="badge badge-slate">AI</span>' : ''}
             <span class="font-semibold text-sm">${esc(issue.title||issue.id)}</span>
           </div>
           ${(issue.findings||[]).map(f=>`<div class="text-xs text-slate-300 mb-1">• ${esc(f)}</div>`).join('')}
-          ${(issue.evidence||[]).length?`<div class="text-xs text-slate-500 mt-1 italic">${issue.evidence.map(e=>`↳ ${esc(e)}`).join('<br>')}</div>`:''}
-          ${issue.screenshot_crop?`<div class="mt-2 rounded overflow-hidden border border-slate-700"><img src="data:image/png;base64,${issue.screenshot_crop}" class="w-full" loading="lazy"/></div>`:''}
-          ${issue.fix?`<div class="text-xs text-indigo-300 mt-1 border-t border-slate-700 pt-1"><strong>Fix:</strong> ${esc(issue.fix)}</div>`:''}
-          ${issue.revenue_signal?`<div class="text-xs text-green-400 mt-1">${esc(issue.revenue_signal)}</div>`:''}
+          ${(issue.evidence||[]).length ? `<div class="text-xs text-slate-500 mt-1 italic">${issue.evidence.map(e=>`↳ ${esc(e)}`).join('<br>')}</div>` : ''}
+          ${issue.screenshot_crop ? `<div class="mt-2 rounded overflow-hidden border border-slate-700"><img src="data:image/png;base64,${issue.screenshot_crop}" class="w-full" loading="lazy"/></div>` : ''}
+          ${issue.fix ? `<div class="text-xs text-indigo-300 mt-1 border-t border-slate-700 pt-1"><strong>Fix:</strong> ${esc(issue.fix)}</div>` : ''}
+          ${issue.revenue_signal ? `<div class="text-xs text-green-400 mt-1">${esc(issue.revenue_signal)}</div>` : ''}
         </div>`;
       }).join('')
     : '<div class="text-slate-400 text-sm">No confirmed issues.</div>';
@@ -749,7 +739,7 @@ function showCroModal(idx) {
 }
 function closeCroModal() { document.getElementById('cro-modal').style.display = 'none'; }
 
-// ── Screenshot modal ─────────────────────────────────────────────────────────────────────
+// ── Screenshot modal ───────────────────────────────────────────────────────────────────
 let _ssIdx = null;
 function showScreenshot(idx) {
   const r = results[urls[idx].url] || {};
@@ -768,7 +758,7 @@ function dlScreenshot() {
   const r = results[urls[_ssIdx].url] || {};
   if (!r.screenshot_b64) return;
   const a = document.createElement('a');
-  a.href = 'data:image/png;base64,' + r.screenshot_b64;
+  a.href     = 'data:image/png;base64,' + r.screenshot_b64;
   a.download = urls[_ssIdx].url.replace(/https?:\/\//, '').replace(/[^a-z0-9]/gi, '_') + '.png';
   a.click();
 }
