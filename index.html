@@ -446,7 +446,7 @@ function nicheKeywords(niche) {
 // Run a single Apify Google Maps search and return items
 async function apifySearch(token, searchTerm, maxResults, country) {
   const runResp = await fetch(
-    `https://api.apify.com/v2/acts/compass~google-maps-scraper/runs?token=${encodeURIComponent(token)}`,
+    `https://api.apify.com/v2/acts/compass~crawler-google-places/runs?token=${encodeURIComponent(token)}`,
     {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
