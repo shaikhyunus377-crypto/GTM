@@ -343,9 +343,15 @@ function renderTable() {
 }
 
 function dmHtml(hd) {
-  if (!hd) return '<span class="text-slate-600">&mdash;</span>';
-  if (!hd.found) return '<span class="tag-nodm">No DM</span>' +
-    (hd.error ? '<br><span class="text-slate-500 text-xs">' + esc(hd.error) + '</span>' : '');
+  if (!hd) return '<span class="text-slate-500 text-xs italic">No key set</span>';
+  if (!hd.found) {
+    const reason = hd.error
+      ? '<br><span class="text-red-400 text-xs">' + esc(hd.error) + '</span>'
+      : (hd.total === 0
+          ? '<br><span class="text-slate-400 text-xs">0 contacts on Hunter.io</span>'
+          : '<br><span class="text-slate-400 text-xs">No contacts found</span>');
+    return '<span class="tag-nodm">✕ No DM</span>' + reason;
+  }
   const name  = [hd.first_name, hd.last_name].filter(Boolean).join(' ') || '&mdash;';
   const title = hd.title ? '<br><span class="text-slate-400 text-xs">' + esc(hd.title) + '</span>' : '';
   return '<span class="tag-dm">&#10003; DM</span><br>' +
@@ -544,8 +550,11 @@ async function scrapeOne(u) {
         });
         const hd = await hr.json();
         if (!hr.ok) {
-          // Hunter API error — record it but continue scraping
+          // Hunter API error (bad key, rate limit, etc.) — mark no_dm and stop
           hunter_data = { found: false, error: hd.error || ('HTTP ' + hr.status) };
+          results[u.url] = { status: 'no_dm', hunter_data };
+          updateRow(u.idx);
+          return;
         } else if (hd.found && hd.top_contacts && hd.top_contacts.length > 0) {
           const c = hd.top_contacts[0];
           const nameParts = (c.name || '').trim().split(/\s+/);
