@@ -35,7 +35,7 @@ try:
 except ImportError:
     CRO_AVAILABLE = False
 
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 APIF_ACTOR  = "compass~crawler-google-places"
 
 _jobs: dict[str, dict] = {}
@@ -63,32 +63,60 @@ async def scrape_website(client: httpx.AsyncClient, url: str, scrapingbee_key: s
         else:
             resp = await client.get(url, headers=HEADERS, timeout=20, follow_redirects=True)
         if resp.is_success:
-            return {"html": resp.text, "status": "ok", "error": None}
-        return {"html": "", "status": "error", "error": f"HTTP {resp.status_code}"}
+            return {"ok": True, "html": resp.text}
+        return {"ok": False, "html": "", "error": f"HTTP {resp.status_code}"}
     except Exception as e:
-        return {"html": "", "status": "error", "error": str(e)[:120]}
+        return {"ok": False, "html": "", "error": str(e)[:120]}
 
 
 def run_cro_pipeline(html: str, dom_elements: list, industry: str, url: str) -> dict:
+    """Run CRO audit and return response shaped for the frontend.
+
+    Frontend expects:
+      cro.meta.generated_at, cro.meta.site_type
+      cro.client_summary.high / .medium / .low
+      cro.summary.confirmed_high / .confirmed_medium
+      cro.issues  (list, for modal)
+      cro.client_report  (alias, confirmed only)
+      cro.pitch_angle
+    """
     if not CRO_AVAILABLE or not html:
-        return {"error": "CRO not available or no HTML", "summary": {}}
+        return {"error": "CRO not available or no HTML", "summary": {}, "issues": [], "client_report": []}
     try:
         report = run_audit(html, dom_elements, industry=industry, url=url)
         final  = run_wolf(report, html, dom_elements, industry=industry)
-        cs     = final.get("summary", {})
-        issues = [
-            i for i in final.get("issues", [])
-            if i.get("decision") == "confirmed" and i.get("severity") in ("high", "medium")
-        ]
+
+        all_issues = final.get("issues", [])
+        confirmed  = [i for i in all_issues if i.get("decision") == "confirmed"]
+        n_high     = sum(1 for i in confirmed if i.get("severity") == "high")
+        n_medium   = sum(1 for i in confirmed if i.get("severity") == "medium")
+        n_low      = sum(1 for i in confirmed if i.get("severity") == "low")
+
         return {
-            "summary":     {"high": cs.get("confirmed_high", 0), "medium": cs.get("confirmed_medium", 0)},
-            "top_issues":  [{"id": i.get("id"), "title": i.get("title"), "severity": i.get("severity"),
-                             "fix": i.get("fix", "")[:200]} for i in issues[:6]],
-            "pitch_angle": _pitch_angle(issues),
-            "full_report": final,
+            **final,
+            # meta block the modal reads
+            "meta": final.get("meta") or {
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "site_type":    industry,
+                "industry":     industry,
+            },
+            # client_summary.high / .medium / .low  (primary path in frontend)
+            "client_summary": final.get("client_summary") or {
+                "high":   n_high,
+                "medium": n_medium,
+                "low":    n_low,
+            },
+            # summary.confirmed_high / .confirmed_medium  (fallback path)
+            "summary": final.get("summary") or {
+                "confirmed_high":   n_high,
+                "confirmed_medium": n_medium,
+            },
+            "issues":        all_issues,  # full list the modal iterates
+            "client_report": confirmed,   # confirmed-only alias
+            "pitch_angle":   _pitch_angle(confirmed),
         }
     except Exception as e:
-        return {"error": str(e), "summary": {}}
+        return {"error": str(e), "summary": {}, "issues": [], "client_report": []}
 
 
 def _pitch_angle(issues: list[dict]) -> str:
@@ -106,7 +134,7 @@ async def find_contact(client: httpx.AsyncClient, domain: str, hunter_key: str) 
         return {"found": False, "error": "No Hunter key"}
     domain = re.sub(r"^https?://(www\.)?|/.*$", "", domain)
     try:
-        resp = await client.get(
+        resp   = await client.get(
             "https://api.hunter.io/v2/domain-search",
             params={"domain": domain, "api_key": hunter_key, "limit": 5},
             timeout=15,
@@ -125,9 +153,12 @@ async def find_contact(client: httpx.AsyncClient, domain: str, hunter_key: str) 
             "linkedin":     top.get("linkedin", ""),
             "company":      (data.get("data") or {}).get("organization", ""),
             "total":        len(emails),
-            "all_contacts": [{"name": f"{e.get('first_name','')} {e.get('last_name','')}".strip(),
-                              "email": e.get("value", ""), "position": e.get("position", ""),
-                              "linkedin": e.get("linkedin", "")} for e in emails],
+            "all_contacts": [
+                {"name": f"{e.get('first_name','')} {e.get('last_name','')}".strip(),
+                 "email": e.get("value", ""), "position": e.get("position", ""),
+                 "linkedin": e.get("linkedin", "")}
+                for e in emails
+            ],
         }
     except Exception as e:
         return {"found": False, "error": str(e)[:120]}
@@ -351,18 +382,18 @@ async def run_pipeline(job_id, apify_token, niche, city, country, count,
                     update("processing", f"Processing {i+1}/{len(leads)}: {lead['name'] or lead['website']}", pct)
                     out    = {**lead}
                     scrape = await scrape_website(client, lead["website"], scrapingbee_key)
-                    out["scrape_status"] = scrape["status"]
+                    out["scrape_status"] = "ok" if scrape["ok"] else "error"
                     out["scrape_error"]  = scrape.get("error")
-                    out["cro"]     = run_cro_pipeline(scrape["html"], [], industry, lead["website"]) if scrape["html"] else {"error": "no HTML", "summary": {}}
-                    domain         = re.sub(r"^https?://(www\.)?|/.*$", "", lead["website"])
-                    out["contact"] = await find_contact(client, domain, hunter_key)
+                    out["cro_audit"]     = run_cro_pipeline(scrape["html"], [], industry, lead["website"]) if scrape["html"] else {"error": "no HTML", "issues": [], "client_report": []}
+                    domain              = re.sub(r"^https?://(www\.)?|/.*$", "", lead["website"])
+                    out["contact"]       = await find_contact(client, domain, hunter_key)
                     return out
 
             results = await asyncio.gather(*[process_lead(i, lead) for i, lead in enumerate(leads)])
 
         with_contact = sum(1 for r in results if r.get("contact", {}).get("found"))
-        with_cro     = sum(1 for r in results if r.get("cro") and not r["cro"].get("error"))
-        high_issues  = sum(r.get("cro", {}).get("summary", {}).get("high", 0) for r in results)
+        with_cro     = sum(1 for r in results if r.get("cro_audit") and not r["cro_audit"].get("error"))
+        high_issues  = sum(r.get("cro_audit", {}).get("client_summary", {}).get("high", 0) for r in results)
         job["status"]   = "done"
         job["progress"] = 100
         job["result"]   = {
@@ -388,7 +419,10 @@ async def run_pipeline(job_id, apify_token, niche, city, country, count,
 
 async def handle_health(request: Request) -> JSONResponse:
     return JSONResponse({
-        "status": "ok", "service": "GTM Pipeline Agent", "version": APP_VERSION,
+        "status":        "ok",
+        "server":        APP_VERSION,   # frontend reads d.server
+        "version":       APP_VERSION,
+        "service":       "GTM Pipeline Agent",
         "cro_available": CRO_AVAILABLE,
         "endpoints": ["/scrape", "/cro", "/hunter", "/get-leads", "/pipeline", "/pipeline/status/{job_id}"],
     })
@@ -398,12 +432,17 @@ async def handle_scrape(request: Request) -> JSONResponse:
     """
     POST /scrape
     Body: { url, scrapingbee_key?, industry?, run_cro? }
+
+    Success response (no 'status' key — frontend sets status:'done' itself via spread):
+      { html, cro_audit? }
+    Error response (data.error present — frontend sets status:'error'):
+      { error }
     """
     body            = await request.json()
     url             = (body.get("url") or "").strip()
     scrapingbee_key = (body.get("scrapingbee_key") or "").strip()
     industry        = (body.get("industry") or "local_business").strip()
-    run_cro         = body.get("run_cro", False)
+    run_cro         = bool(body.get("run_cro", False))
 
     if not url:
         return JSONResponse({"error": "url required"}, status_code=400)
@@ -411,10 +450,17 @@ async def handle_scrape(request: Request) -> JSONResponse:
     async with httpx.AsyncClient(follow_redirects=True) as client:
         result = await scrape_website(client, url, scrapingbee_key)
 
-    if run_cro and result["html"]:
-        result["cro"] = run_cro_pipeline(result["html"], [], industry, url)
+    if not result["ok"]:
+        # Frontend checks data.error to decide status:'error'
+        return JSONResponse({"error": result.get("error", "Scrape failed")})
 
-    return JSONResponse(result)
+    # Do NOT include a 'status' key — frontend does {status:'done', ...data}
+    # and any 'status' in data would override 'done'
+    response = {"html": result["html"]}
+    if run_cro and result["html"]:
+        response["cro_audit"] = run_cro_pipeline(result["html"], [], industry, url)
+
+    return JSONResponse(response)
 
 
 async def handle_cro(request: Request) -> JSONResponse:
@@ -431,8 +477,7 @@ async def handle_cro(request: Request) -> JSONResponse:
     if not html:
         return JSONResponse({"error": "html required"}, status_code=400)
 
-    result = run_cro_pipeline(html, dom_elements, industry, url)
-    return JSONResponse(result)
+    return JSONResponse(run_cro_pipeline(html, dom_elements, industry, url))
 
 
 async def handle_hunter(request: Request) -> JSONResponse:
@@ -440,8 +485,8 @@ async def handle_hunter(request: Request) -> JSONResponse:
     POST /hunter
     Body: { domain, api_key }
     """
-    body      = await request.json()
-    domain    = (body.get("domain") or "").strip()
+    body       = await request.json()
+    domain     = (body.get("domain") or "").strip()
     hunter_key = (body.get("api_key") or body.get("hunter_key") or "").strip()
 
     if not domain:
@@ -469,7 +514,8 @@ async def handle_get_leads(request: Request) -> JSONResponse:
         return JSONResponse({"error": "city required"}, status_code=400)
     try:
         leads, zips = await find_leads(token, niche, city, country, count, min_reviews, max_reviews)
-        return JSONResponse({"leads": leads, "total": len(leads), "city": city, "niche": niche, "zips_searched": zips})
+        return JSONResponse({"leads": leads, "total": len(leads), "city": city,
+                             "niche": niche, "zips_searched": zips})
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     except Exception as e:
@@ -507,9 +553,10 @@ async def handle_pipeline_start(request: Request) -> JSONResponse:
         min_reviews, max_reviews, hunter_key, scrapingbee_key, industry,
     ))
     return JSONResponse({
-        "job_id": job_id, "status": "running",
-        "message": f"Pipeline started for '{niche}' in {city}. Poll /pipeline/status/{job_id} for results.",
-        "poll_url": f"/pipeline/status/{job_id}",
+        "job_id":            job_id,
+        "status":            "running",
+        "message":           f"Pipeline started for '{niche}' in {city}. Poll /pipeline/status/{job_id} for results.",
+        "poll_url":          f"/pipeline/status/{job_id}",
         "estimated_minutes": max(2, count // 3),
     })
 
