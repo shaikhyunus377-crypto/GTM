@@ -2,28 +2,24 @@
 """
 pipeline.py  — GTM AI Agent Full Pipeline
 ==========================================
-Exposes two endpoints the AI agent uses:
-
-  POST /get-leads   — Apify Google Maps search → returns businesses with websites
-  POST /pipeline    — Full pipeline: leads → scrape → CRO → Hunter contact
-  GET  /pipeline/status/{job_id}  — poll async job
-  GET  /            — health check
-
-Deploy alongside or instead of the existing server.
-All keys passed per-request — no env vars required.
+Endpoints:
+  GET  /                           — health check
+  POST /scrape                     — scrape a URL (+ optional CRO)
+  POST /cro                        — run CRO audit on HTML
+  POST /hunter                     — find decision maker via Hunter.io
+  POST /get-leads                  — Apify search only
+  POST /pipeline                   — full async pipeline, returns job_id
+  GET  /pipeline/status/{job_id}   — poll async job
+  POST /pipeline/sync              — synchronous pipeline (<=10 leads)
 """
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import re
 import time
 import traceback
-import urllib.parse
-import urllib.request
 from datetime import datetime, timezone
-from typing import Any
 
 import httpx
 from starlette.applications import Starlette
@@ -32,7 +28,6 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-# Import existing CRO pipeline
 try:
     from cro_bots.cro_audit import run_audit
     from cro_wolf import run_wolf
@@ -40,27 +35,106 @@ try:
 except ImportError:
     CRO_AVAILABLE = False
 
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.1.0"
+APIF_ACTOR  = "compass~crawler-google-places"
 
-# In-memory job store for async pipeline jobs
 _jobs: dict[str, dict] = {}
 
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.5",
+}
+
 
 # ─────────────────────────────────────────────────────────────────────────────
-# APIFY  —  Google Maps scraper
+# CORE FUNCTIONS
 # ─────────────────────────────────────────────────────────────────────────────
 
-APIF_ACTOR = "compass~crawler-google-places"
+async def scrape_website(client: httpx.AsyncClient, url: str, scrapingbee_key: str = "") -> dict:
+    try:
+        if scrapingbee_key:
+            resp = await client.get(
+                "https://app.scrapingbee.com/api/v1/",
+                params={"api_key": scrapingbee_key, "url": url, "render_js": "true",
+                        "block_ads": "true", "block_resources": "false", "premium_proxy": "false"},
+                timeout=45,
+            )
+        else:
+            resp = await client.get(url, headers=HEADERS, timeout=20, follow_redirects=True)
+        if resp.is_success:
+            return {"html": resp.text, "status": "ok", "error": None}
+        return {"html": "", "status": "error", "error": f"HTTP {resp.status_code}"}
+    except Exception as e:
+        return {"html": "", "status": "error", "error": str(e)[:120]}
 
 
-async def apify_search(
-    client: httpx.AsyncClient,
-    token: str,
-    search_term: str,
-    max_results: int,
-    country: str,
-) -> list[dict]:
-    """Run one Apify actor and return raw items."""
+def run_cro_pipeline(html: str, dom_elements: list, industry: str, url: str) -> dict:
+    if not CRO_AVAILABLE or not html:
+        return {"error": "CRO not available or no HTML", "summary": {}}
+    try:
+        report = run_audit(html, dom_elements, industry=industry, url=url)
+        final  = run_wolf(report, html, dom_elements, industry=industry)
+        cs     = final.get("summary", {})
+        issues = [
+            i for i in final.get("issues", [])
+            if i.get("decision") == "confirmed" and i.get("severity") in ("high", "medium")
+        ]
+        return {
+            "summary":     {"high": cs.get("confirmed_high", 0), "medium": cs.get("confirmed_medium", 0)},
+            "top_issues":  [{"id": i.get("id"), "title": i.get("title"), "severity": i.get("severity"),
+                             "fix": i.get("fix", "")[:200]} for i in issues[:6]],
+            "pitch_angle": _pitch_angle(issues),
+            "full_report": final,
+        }
+    except Exception as e:
+        return {"error": str(e), "summary": {}}
+
+
+def _pitch_angle(issues: list[dict]) -> str:
+    if not issues:
+        return "Website looks solid — pitch on growth opportunities."
+    high = [i for i in issues if i.get("severity") == "high"]
+    main = (high or issues)[0]
+    severity = main.get("severity", "medium")
+    prefix = "\U0001f6a8 Critical" if severity == "high" else "⚠️ Important"
+    return f"{prefix}: {main.get('title', '')}"
+
+
+async def find_contact(client: httpx.AsyncClient, domain: str, hunter_key: str) -> dict:
+    if not hunter_key or not domain:
+        return {"found": False, "error": "No Hunter key"}
+    domain = re.sub(r"^https?://(www\.)?|/.*$", "", domain)
+    try:
+        resp = await client.get(
+            "https://api.hunter.io/v2/domain-search",
+            params={"domain": domain, "api_key": hunter_key, "limit": 5},
+            timeout=15,
+        )
+        data   = resp.json()
+        emails = (data.get("data") or {}).get("emails", [])
+        if not emails:
+            return {"found": False, "total": 0}
+        top = emails[0]
+        return {
+            "found":        True,
+            "name":         f"{top.get('first_name','')} {top.get('last_name','')}".strip(),
+            "email":        top.get("value", ""),
+            "position":     top.get("position", ""),
+            "seniority":    top.get("seniority", ""),
+            "linkedin":     top.get("linkedin", ""),
+            "company":      (data.get("data") or {}).get("organization", ""),
+            "total":        len(emails),
+            "all_contacts": [{"name": f"{e.get('first_name','')} {e.get('last_name','')}".strip(),
+                              "email": e.get("value", ""), "position": e.get("position", ""),
+                              "linkedin": e.get("linkedin", "")} for e in emails],
+        }
+    except Exception as e:
+        return {"found": False, "error": str(e)[:120]}
+
+
+async def apify_search(client: httpx.AsyncClient, token: str, search_term: str,
+                       max_results: int, country: str) -> list[dict]:
     payload = {
         "searchStringsArray":        [search_term],
         "maxCrawledPlacesPerSearch": min(max_results + 30, 200),
@@ -69,34 +143,25 @@ async def apify_search(
     }
     if country:
         payload["countryCode"] = country.lower()
-
     run_resp = await client.post(
         f"https://api.apify.com/v2/acts/{APIF_ACTOR}/runs",
-        params={"token": token},
-        json=payload,
-        timeout=30,
+        params={"token": token}, json=payload, timeout=30,
     )
     if run_resp.status_code in (401, 403):
         raise ValueError(f"Invalid Apify token ({run_resp.status_code})")
     if not run_resp.is_success:
         err = run_resp.json().get("error", {}).get("message", f"HTTP {run_resp.status_code}")
         raise ValueError(f"Apify run failed: {err}")
-
     run_data   = run_resp.json()
     run_id     = run_data["data"]["id"]
     dataset_id = run_data["data"]["defaultDatasetId"]
-
-    # Poll until done
     status = "READY"
     fails  = 0
     while status in ("READY", "RUNNING"):
         await asyncio.sleep(4)
         try:
-            sr = await client.get(
-                f"https://api.apify.com/v2/actor-runs/{run_id}",
-                params={"token": token},
-                timeout=15,
-            )
+            sr         = await client.get(f"https://api.apify.com/v2/actor-runs/{run_id}",
+                                          params={"token": token}, timeout=15)
             sd         = sr.json()
             status     = sd["data"]["status"]
             dataset_id = sd["data"].get("defaultDatasetId", dataset_id)
@@ -105,14 +170,11 @@ async def apify_search(
             fails += 1
             if fails > 5:
                 status = "FAILED"
-
     if status != "SUCCEEDED":
         return []
-
     items_resp = await client.get(
         f"https://api.apify.com/v2/datasets/{dataset_id}/items",
-        params={"token": token, "limit": 300, "clean": "true"},
-        timeout=30,
+        params={"token": token, "limit": 300, "clean": "true"}, timeout=30,
     )
     if not items_resp.is_success:
         return []
@@ -120,7 +182,7 @@ async def apify_search(
     return data if isinstance(data, list) else data.get("items", [])
 
 
-def extract_zip(address: str) -> str | None:
+def extract_zip(address: str):
     if not address:
         return None
     us = re.search(r"\b(\d{5})(?:-\d{4})?\b", address)
@@ -175,30 +237,14 @@ def niche_keywords(niche: str) -> list[str]:
     return [base, base + " near me", base + " service", base + " company", "best " + base, "local " + base]
 
 
-async def find_leads(
-    token: str,
-    niche: str,
-    city: str,
-    country: str,
-    count: int,
-    min_reviews: int,
-    max_reviews: int,
-    progress_cb=None,
-) -> tuple[list[dict], list[str]]:
-    """
-    Two-phase Apify search:
-      Phase 1 — broad city search to discover zip codes
-      Phase 2 — iterate zip × keyword until count reached
-    Returns (leads_list, zips_searched)
-    """
+async def find_leads(token, niche, city, country, count, min_reviews, max_reviews, progress_cb=None):
     keywords    = niche_keywords(niche)
     country_str = f", {country}" if country else ""
-    found       = {}   # website → lead dict
+    found       = {}
     seen_places = set()
-    discovered  = {}   # zip → 0
+    discovered  = {}
 
-    def process_items(items: list[dict]) -> int:
-        added = 0
+    def process_items(items):
         for item in items:
             if len(found) >= count:
                 break
@@ -226,209 +272,57 @@ async def find_leads(
                 "rating":   item.get("totalScore"),
                 "category": item.get("categoryName") or (item.get("categories") or [""])[0],
             }
-            added += 1
             z = extract_zip(item.get("address") or "")
             if z and z not in discovered:
                 discovered[z] = 0
-        # collect zips from no-website businesses too
         for item in items:
             z = extract_zip(item.get("address") or "")
             if z and z not in discovered:
                 discovered[z] = 0
-        return added
 
     limits = httpx.Limits(max_connections=5, max_keepalive_connections=2)
     async with httpx.AsyncClient(limits=limits, follow_redirects=True) as client:
-        # Phase 1
         if progress_cb:
             await progress_cb(f"Phase 1: discovering zip codes in {city}...")
-        broad_term  = f"{keywords[0]} in {city}{country_str}"
-        broad_items = await apify_search(client, token, broad_term, 100, country)
+        broad_items = await apify_search(client, token, f"{keywords[0]} in {city}{country_str}", 100, country)
         process_items(broad_items)
-
         zip_list = list(discovered.keys())
         if progress_cb:
             await progress_cb(f"Found {len(zip_list)} zip codes, {len(found)}/{count} leads")
-
-        # Phase 2  —  zip × keyword queue
-        queue = []
-        for z in zip_list:
-            queue.append({"zip": z, "kw": keywords[0]})
+        queue = [{"zip": z, "kw": keywords[0]} for z in zip_list]
         for ki in range(1, len(keywords)):
             for z in zip_list:
                 queue.append({"zip": z, "kw": keywords[ki]})
         for kw in keywords[1:]:
             queue.append({"zip": None, "kw": kw})
-
         for entry in queue:
             if len(found) >= count:
                 break
-            z   = entry["zip"]
-            kw  = entry["kw"]
-            loc = f"{z}, {city}{country_str}" if z else f"{city}{country_str}"
+            z    = entry["zip"]
+            kw   = entry["kw"]
+            loc  = f"{z}, {city}{country_str}" if z else f"{city}{country_str}"
             term = f"{kw} in {loc}"
             if progress_cb:
                 await progress_cb(f"Searching '{term}' ({len(found)}/{count})")
             items = await apify_search(client, token, term, count - len(found), country)
             process_items(items)
-            # dynamic zip discovery
             for item in items:
                 z2 = extract_zip(item.get("address") or "")
                 if z2 and z2 not in discovered:
                     discovered[z2] = 0
                     queue.append({"zip": z2, "kw": keywords[0]})
-
     return list(found.values()), list(discovered.keys())
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# WEB SCRAPER
+# PIPELINE RUNNER
 # ─────────────────────────────────────────────────────────────────────────────
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.5",
-}
-
-
-async def scrape_website(client: httpx.AsyncClient, url: str, scrapingbee_key: str = "") -> dict:
-    """Fetch HTML of a website. Uses ScrapingBee if key provided."""
-    try:
-        if scrapingbee_key:
-            resp = await client.get(
-                "https://app.scrapingbee.com/api/v1/",
-                params={
-                    "api_key":         scrapingbee_key,
-                    "url":             url,
-                    "render_js":       "true",
-                    "block_ads":       "true",
-                    "block_resources": "false",
-                    "premium_proxy":   "false",
-                },
-                timeout=45,
-            )
-        else:
-            resp = await client.get(url, headers=HEADERS, timeout=20, follow_redirects=True)
-
-        if resp.is_success:
-            return {"html": resp.text, "status": "ok", "error": None}
-        return {"html": "", "status": "error", "error": f"HTTP {resp.status_code}"}
-    except Exception as e:
-        return {"html": "", "status": "error", "error": str(e)[:120]}
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# CRO AUDIT
-# ─────────────────────────────────────────────────────────────────────────────
-
-def run_cro_pipeline(html: str, dom_elements: list, industry: str, url: str) -> dict:
-    if not CRO_AVAILABLE or not html:
-        return {"error": "CRO not available or no HTML", "summary": {}}
-    try:
-        report = run_audit(html, dom_elements, industry=industry, url=url)
-        final  = run_wolf(report, html, dom_elements, industry=industry)
-        cs     = final.get("summary", {})
-        # Build client-friendly summary
-        issues = [
-            i for i in final.get("issues", [])
-            if i.get("decision") == "confirmed"
-            and i.get("severity") in ("high", "medium")
-        ]
-        return {
-            "summary": {
-                "high":   cs.get("confirmed_high", 0),
-                "medium": cs.get("confirmed_medium", 0),
-            },
-            "top_issues": [
-                {
-                    "id":       i.get("id"),
-                    "title":    i.get("title"),
-                    "severity": i.get("severity"),
-                    "fix":      i.get("fix", "")[:200],
-                }
-                for i in issues[:6]
-            ],
-            "pitch_angle": _pitch_angle(issues),
-        }
-    except Exception as e:
-        return {"error": str(e), "summary": {}}
-
-
-def _pitch_angle(issues: list[dict]) -> str:
-    """Generate a one-line sales pitch angle from CRO issues."""
-    if not issues:
-        return "Website looks solid — pitch on growth opportunities."
-    high = [i for i in issues if i.get("severity") == "high"]
-    main = (high or issues)[0]
-    title = main.get("title", "")
-    severity = main.get("severity", "medium")
-    prefix = "\U0001f6a8 Critical" if severity == "high" else "⚠️ Important"
-    return f"{prefix}: {title}"
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# HUNTER.IO  —  Decision maker finder
-# ─────────────────────────────────────────────────────────────────────────────
-
-async def find_contact(client: httpx.AsyncClient, domain: str, hunter_key: str) -> dict:
-    if not hunter_key or not domain:
-        return {"found": False, "error": "No Hunter key"}
-    domain = re.sub(r"^https?://(www\.)?|/.*$", "", domain)
-    try:
-        resp = await client.get(
-            "https://api.hunter.io/v2/domain-search",
-            params={"domain": domain, "api_key": hunter_key, "limit": 5},
-            timeout=15,
-        )
-        data = resp.json()
-        emails = (data.get("data") or {}).get("emails", [])
-        if not emails:
-            return {"found": False, "total": 0}
-        top = emails[0]
-        return {
-            "found":    True,
-            "name":     f"{top.get('first_name','')} {top.get('last_name','')}".strip(),
-            "email":    top.get("value", ""),
-            "position": top.get("position", ""),
-            "seniority":top.get("seniority", ""),
-            "linkedin": top.get("linkedin", ""),
-            "company":  (data.get("data") or {}).get("organization", ""),
-            "total":    len(emails),
-            "all_contacts": [
-                {
-                    "name":     f"{e.get('first_name','')} {e.get('last_name','')}".strip(),
-                    "email":    e.get("value", ""),
-                    "position": e.get("position", ""),
-                    "linkedin": e.get("linkedin", ""),
-                }
-                for e in emails
-            ],
-        }
-    except Exception as e:
-        return {"found": False, "error": str(e)[:120]}
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# FULL PIPELINE RUNNER
-# ─────────────────────────────────────────────────────────────────────────────
-
-async def run_pipeline(
-    job_id: str,
-    apify_token: str,
-    niche: str,
-    city: str,
-    country: str,
-    count: int,
-    min_reviews: int,
-    max_reviews: int,
-    hunter_key: str,
-    scrapingbee_key: str,
-    industry: str,
-):
+async def run_pipeline(job_id, apify_token, niche, city, country, count,
+                       min_reviews, max_reviews, hunter_key, scrapingbee_key, industry):
     job = _jobs[job_id]
 
-    def update(stage: str, detail: str = "", pct: int = None):
+    def update(stage, detail="", pct=None):
         job["stage"]  = stage
         job["detail"] = detail
         if pct is not None:
@@ -436,83 +330,51 @@ async def run_pipeline(
         job["updated_at"] = datetime.now(timezone.utc).isoformat()
 
     try:
-        # ── Step 1: Get leads from Apify ──
         update("finding_leads", f"Searching Google Maps for '{niche}' in {city}", 5)
         leads, zips = await find_leads(
-            apify_token, niche, city, country, count,
-            min_reviews, max_reviews,
+            apify_token, niche, city, country, count, min_reviews, max_reviews,
             progress_cb=lambda msg: update("finding_leads", msg),
         )
         update("leads_found", f"{len(leads)} leads found across {len(zips)} zip codes", 30)
-
         if not leads:
-            job["status"]  = "done"
-            job["result"]  = {"leads": [], "summary": {"total_leads": 0}}
+            job["status"] = "done"
+            job["result"] = {"leads": [], "summary": {"total_leads": 0}}
             return
 
-        # ── Step 2-4: Scrape + CRO + Hunter per lead ──
-        results = []
-        limits  = httpx.Limits(max_connections=8, max_keepalive_connections=4)
-
+        limits = httpx.Limits(max_connections=8, max_keepalive_connections=4)
         async with httpx.AsyncClient(limits=limits, follow_redirects=True) as client:
-            sem = asyncio.Semaphore(3)  # max 3 concurrent scrapers
+            sem = asyncio.Semaphore(3)
 
-            async def process_lead(i: int, lead: dict) -> dict:
+            async def process_lead(i, lead):
                 async with sem:
                     pct = 30 + int((i / len(leads)) * 65)
-                    update(
-                        "processing",
-                        f"Processing {i+1}/{len(leads)}: {lead['name'] or lead['website']}",
-                        pct,
-                    )
-                    out = {**lead}
-
-                    # Scrape
+                    update("processing", f"Processing {i+1}/{len(leads)}: {lead['name'] or lead['website']}", pct)
+                    out    = {**lead}
                     scrape = await scrape_website(client, lead["website"], scrapingbee_key)
                     out["scrape_status"] = scrape["status"]
                     out["scrape_error"]  = scrape.get("error")
-
-                    # CRO
-                    if scrape["html"]:
-                        out["cro"] = run_cro_pipeline(
-                            scrape["html"], [], industry, lead["website"]
-                        )
-                    else:
-                        out["cro"] = {"error": "no HTML", "summary": {}}
-
-                    # Hunter contact
-                    domain = re.sub(r"^https?://(www\.)?|/.*$", "", lead["website"])
+                    out["cro"]     = run_cro_pipeline(scrape["html"], [], industry, lead["website"]) if scrape["html"] else {"error": "no HTML", "summary": {}}
+                    domain         = re.sub(r"^https?://(www\.)?|/.*$", "", lead["website"])
                     out["contact"] = await find_contact(client, domain, hunter_key)
-
                     return out
 
-            tasks   = [process_lead(i, lead) for i, lead in enumerate(leads)]
-            results = await asyncio.gather(*tasks, return_exceptions=False)
+            results = await asyncio.gather(*[process_lead(i, lead) for i, lead in enumerate(leads)])
 
-        # ── Step 5: Build summary ──
-        update("building_summary", "", 97)
         with_contact = sum(1 for r in results if r.get("contact", {}).get("found"))
         with_cro     = sum(1 for r in results if r.get("cro") and not r["cro"].get("error"))
-        high_issues  = sum(1 for r in results for _ in range(r.get("cro", {}).get("summary", {}).get("high", 0)))
-
-        job["status"] = "done"
-        job["result"] = {
+        high_issues  = sum(r.get("cro", {}).get("summary", {}).get("high", 0) for r in results)
+        job["status"]   = "done"
+        job["progress"] = 100
+        job["result"]   = {
             "summary": {
-                "total_leads":    len(results),
-                "with_contact":   with_contact,
-                "with_cro_audit": with_cro,
-                "total_high_cro": high_issues,
-                "niche":          niche,
-                "city":           city,
-                "country":        country,
-                "zips_searched":  zips,
-                "generated_at":   datetime.now(timezone.utc).isoformat(),
+                "total_leads": len(results), "with_contact": with_contact,
+                "with_cro_audit": with_cro, "total_high_cro": high_issues,
+                "niche": niche, "city": city, "country": country,
+                "zips_searched": zips, "generated_at": datetime.now(timezone.utc).isoformat(),
             },
             "leads": results,
         }
-        job["progress"] = 100
         update("done", f"Pipeline complete: {len(results)} leads", 100)
-
     except Exception as e:
         job["status"] = "error"
         job["error"]  = str(e)
@@ -526,47 +388,88 @@ async def run_pipeline(
 
 async def handle_health(request: Request) -> JSONResponse:
     return JSONResponse({
-        "status":        "ok",
-        "service":       "GTM Pipeline Agent",
-        "version":       APP_VERSION,
+        "status": "ok", "service": "GTM Pipeline Agent", "version": APP_VERSION,
         "cro_available": CRO_AVAILABLE,
-        "endpoints": ["/get-leads", "/pipeline", "/pipeline/status/{job_id}"],
+        "endpoints": ["/scrape", "/cro", "/hunter", "/get-leads", "/pipeline", "/pipeline/status/{job_id}"],
     })
 
 
+async def handle_scrape(request: Request) -> JSONResponse:
+    """
+    POST /scrape
+    Body: { url, scrapingbee_key?, industry?, run_cro? }
+    """
+    body            = await request.json()
+    url             = (body.get("url") or "").strip()
+    scrapingbee_key = (body.get("scrapingbee_key") or "").strip()
+    industry        = (body.get("industry") or "local_business").strip()
+    run_cro         = body.get("run_cro", False)
+
+    if not url:
+        return JSONResponse({"error": "url required"}, status_code=400)
+
+    async with httpx.AsyncClient(follow_redirects=True) as client:
+        result = await scrape_website(client, url, scrapingbee_key)
+
+    if run_cro and result["html"]:
+        result["cro"] = run_cro_pipeline(result["html"], [], industry, url)
+
+    return JSONResponse(result)
+
+
+async def handle_cro(request: Request) -> JSONResponse:
+    """
+    POST /cro
+    Body: { html, dom_elements?, industry?, url? }
+    """
+    body         = await request.json()
+    html         = body.get("html") or ""
+    dom_elements = body.get("dom_elements") or []
+    industry     = (body.get("industry") or "local_business").strip()
+    url          = (body.get("url") or "").strip()
+
+    if not html:
+        return JSONResponse({"error": "html required"}, status_code=400)
+
+    result = run_cro_pipeline(html, dom_elements, industry, url)
+    return JSONResponse(result)
+
+
+async def handle_hunter(request: Request) -> JSONResponse:
+    """
+    POST /hunter
+    Body: { domain, api_key }
+    """
+    body      = await request.json()
+    domain    = (body.get("domain") or "").strip()
+    hunter_key = (body.get("api_key") or body.get("hunter_key") or "").strip()
+
+    if not domain:
+        return JSONResponse({"error": "domain required"}, status_code=400)
+
+    async with httpx.AsyncClient() as client:
+        result = await find_contact(client, domain, hunter_key)
+    return JSONResponse(result)
+
+
 async def handle_get_leads(request: Request) -> JSONResponse:
-    """
-    POST /get-leads
-    Body: { apify_token, niche, city, country?, count?, min_reviews?, max_reviews? }
-    Returns leads immediately (may take 1-3 min for large counts).
-    """
-    body = await request.json()
-    token       = body.get("apify_token", "").strip()
-    niche       = body.get("niche", "").strip()
-    city        = body.get("city", "").strip()
-    country     = body.get("country", "").strip()
+    body        = await request.json()
+    token       = (body.get("apify_token") or "").strip()
+    niche       = (body.get("niche") or "").strip()
+    city        = (body.get("city") or "").strip()
+    country     = (body.get("country") or "").strip()
     count       = max(1, min(200, int(body.get("count", 20))))
     min_reviews = int(body.get("min_reviews", 0))
     max_reviews = int(body.get("max_reviews", 0))
-
     if not token:
         return JSONResponse({"error": "apify_token required"}, status_code=400)
     if not niche:
         return JSONResponse({"error": "niche required"}, status_code=400)
     if not city:
         return JSONResponse({"error": "city required"}, status_code=400)
-
     try:
-        leads, zips = await find_leads(
-            token, niche, city, country, count, min_reviews, max_reviews
-        )
-        return JSONResponse({
-            "leads":        leads,
-            "total":        len(leads),
-            "city":         city,
-            "niche":        niche,
-            "zips_searched": zips,
-        })
+        leads, zips = await find_leads(token, niche, city, country, count, min_reviews, max_reviews)
+        return JSONResponse({"leads": leads, "total": len(leads), "city": city, "niche": niche, "zips_searched": zips})
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     except Exception as e:
@@ -574,124 +477,84 @@ async def handle_get_leads(request: Request) -> JSONResponse:
 
 
 async def handle_pipeline_start(request: Request) -> JSONResponse:
-    """
-    POST /pipeline
-    Body: {
-      apify_token, niche, city,
-      country?, count?, min_reviews?, max_reviews?,
-      hunter_key?, scrapingbee_key?, industry?
-    }
-    Returns { job_id } immediately. Poll /pipeline/status/{job_id} for results.
-    """
-    body = await request.json()
-    token           = body.get("apify_token", "").strip()
-    niche           = body.get("niche", "").strip()
-    city            = body.get("city", "").strip()
-    country         = body.get("country", "").strip()
+    body            = await request.json()
+    token           = (body.get("apify_token") or "").strip()
+    niche           = (body.get("niche") or "").strip()
+    city            = (body.get("city") or "").strip()
+    country         = (body.get("country") or "").strip()
     count           = max(1, min(100, int(body.get("count", 10))))
     min_reviews     = int(body.get("min_reviews", 0))
     max_reviews     = int(body.get("max_reviews", 0))
-    hunter_key      = body.get("hunter_key", "").strip()
-    scrapingbee_key = body.get("scrapingbee_key", "").strip()
-    industry        = body.get("industry", "local_business").strip()
-
+    hunter_key      = (body.get("hunter_key") or "").strip()
+    scrapingbee_key = (body.get("scrapingbee_key") or "").strip()
+    industry        = (body.get("industry") or "local_business").strip()
     if not token:
         return JSONResponse({"error": "apify_token required"}, status_code=400)
     if not niche:
         return JSONResponse({"error": "niche required"}, status_code=400)
     if not city:
         return JSONResponse({"error": "city required"}, status_code=400)
-
     job_id = f"{int(time.time()*1000)}-{niche[:10].replace(' ','-')}"
     _jobs[job_id] = {
-        "id":         job_id,
-        "status":     "running",
-        "stage":      "starting",
-        "detail":     "",
-        "progress":   0,
-        "result":     None,
-        "error":      None,
+        "id": job_id, "status": "running", "stage": "starting", "detail": "",
+        "progress": 0, "result": None, "error": None,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
-        "params":     {"niche": niche, "city": city, "country": country, "count": count},
+        "params": {"niche": niche, "city": city, "country": country, "count": count},
     }
-
-    # Fire and forget — run in background
     asyncio.create_task(run_pipeline(
         job_id, token, niche, city, country, count,
         min_reviews, max_reviews, hunter_key, scrapingbee_key, industry,
     ))
-
     return JSONResponse({
-        "job_id":     job_id,
-        "status":     "running",
-        "message":    f"Pipeline started for '{niche}' in {city}. Poll /pipeline/status/{job_id} for results.",
-        "poll_url":   f"/pipeline/status/{job_id}",
+        "job_id": job_id, "status": "running",
+        "message": f"Pipeline started for '{niche}' in {city}. Poll /pipeline/status/{job_id} for results.",
+        "poll_url": f"/pipeline/status/{job_id}",
         "estimated_minutes": max(2, count // 3),
     })
 
 
 async def handle_pipeline_status(request: Request) -> JSONResponse:
-    """
-    GET /pipeline/status/{job_id}
-    Returns current job state, or full results when done.
-    """
     job_id = request.path_params.get("job_id", "")
     job    = _jobs.get(job_id)
     if not job:
         return JSONResponse({"error": "Job not found"}, status_code=404)
-
     resp = {
-        "job_id":     job["id"],
-        "status":     job["status"],
-        "stage":      job["stage"],
-        "detail":     job["detail"],
-        "progress":   job["progress"],
-        "params":     job["params"],
-        "created_at": job["created_at"],
-        "updated_at": job["updated_at"],
+        "job_id": job["id"], "status": job["status"], "stage": job["stage"],
+        "detail": job["detail"], "progress": job["progress"], "params": job["params"],
+        "created_at": job["created_at"], "updated_at": job["updated_at"],
     }
     if job["status"] == "done":
         resp["result"] = job["result"]
     elif job["status"] == "error":
         resp["error"] = job["error"]
-
     return JSONResponse(resp)
 
 
 async def handle_pipeline_sync(request: Request) -> JSONResponse:
-    """
-    POST /pipeline/sync
-    Same as /pipeline but waits and returns results directly.
-    Use only for small counts (<=10 leads) to avoid timeout.
-    """
     body            = await request.json()
-    token           = body.get("apify_token", "").strip()
-    niche           = body.get("niche", "").strip()
-    city            = body.get("city", "").strip()
-    country         = body.get("country", "").strip()
+    token           = (body.get("apify_token") or "").strip()
+    niche           = (body.get("niche") or "").strip()
+    city            = (body.get("city") or "").strip()
+    country         = (body.get("country") or "").strip()
     count           = max(1, min(10, int(body.get("count", 3))))
     min_reviews     = int(body.get("min_reviews", 0))
     max_reviews     = int(body.get("max_reviews", 0))
-    hunter_key      = body.get("hunter_key", "").strip()
-    scrapingbee_key = body.get("scrapingbee_key", "").strip()
-    industry        = body.get("industry", "local_business").strip()
-
+    hunter_key      = (body.get("hunter_key") or "").strip()
+    scrapingbee_key = (body.get("scrapingbee_key") or "").strip()
+    industry        = (body.get("industry") or "local_business").strip()
     if not token:
         return JSONResponse({"error": "apify_token required"}, status_code=400)
-
     job_id = f"sync-{int(time.time()*1000)}"
     _jobs[job_id] = {
-        "id": job_id, "status": "running", "stage": "starting",
-        "detail": "", "progress": 0, "result": None, "error": None,
+        "id": job_id, "status": "running", "stage": "starting", "detail": "",
+        "progress": 0, "result": None, "error": None,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "params": {"niche": niche, "city": city, "count": count},
     }
-    await run_pipeline(
-        job_id, token, niche, city, country, count,
-        min_reviews, max_reviews, hunter_key, scrapingbee_key, industry,
-    )
+    await run_pipeline(job_id, token, niche, city, country, count,
+                       min_reviews, max_reviews, hunter_key, scrapingbee_key, industry)
     job = _jobs[job_id]
     if job["status"] == "error":
         return JSONResponse({"error": job["error"]}, status_code=500)
@@ -703,20 +566,18 @@ async def handle_pipeline_sync(request: Request) -> JSONResponse:
 # ─────────────────────────────────────────────────────────────────────────────
 
 routes = [
-    Route("/",                        handle_health,          methods=["GET"]),
-    Route("/get-leads",               handle_get_leads,       methods=["POST"]),
-    Route("/pipeline",                handle_pipeline_start,  methods=["POST"]),
-    Route("/pipeline/sync",           handle_pipeline_sync,   methods=["POST"]),
+    Route("/",                         handle_health,          methods=["GET"]),
+    Route("/scrape",                   handle_scrape,          methods=["POST"]),
+    Route("/cro",                      handle_cro,             methods=["POST"]),
+    Route("/hunter",                   handle_hunter,          methods=["POST"]),
+    Route("/get-leads",                handle_get_leads,       methods=["POST"]),
+    Route("/pipeline",                 handle_pipeline_start,  methods=["POST"]),
+    Route("/pipeline/sync",            handle_pipeline_sync,   methods=["POST"]),
     Route("/pipeline/status/{job_id}", handle_pipeline_status, methods=["GET"]),
 ]
 
 app = Starlette(routes=routes)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 if __name__ == "__main__":
     import uvicorn
