@@ -342,16 +342,23 @@ function loadConfig() {
 }
 
 // ── API ping ──────────────────────────────────────────────────────────────────────────────────
-async function pingApi() {
+async function pingApi(retries = 3) {
   const base = cfg.api(), el = document.getElementById('api-status');
   if (!base) { el.textContent='Set API URL'; el.className='text-xs text-red-400'; return; }
-  el.textContent='Pinging…'; el.className='text-xs text-slate-400';
+  el.textContent='Connecting…'; el.className='text-xs text-slate-400';
   try {
-    const r = await fetch(base+'/', {signal:AbortSignal.timeout(8000)});
+    const r = await fetch(base+'/', {signal:AbortSignal.timeout(45000)});
     const d = await r.json();
     el.textContent = d.status==='ok' ? `API online — v${d.server||'?'} ${d.cro_available?'✓ CRO':''} ${d.hunter?'✓ Hunter':''}` : 'API error';
     el.className = d.status==='ok' ? 'text-xs text-green-400' : 'text-xs text-red-400';
-  } catch(e) { el.textContent='API unreachable'; el.className='text-xs text-red-400'; }
+  } catch(e) {
+    if (retries > 0) {
+      el.textContent = `Retrying… (${retries})`;
+      setTimeout(() => pingApi(retries - 1), 5000);
+    } else {
+      el.textContent='API unreachable'; el.className='text-xs text-red-400';
+    }
+  }
 }
 
 // ── File handling ────────────────────────────────────────────────────────────────────────────────
