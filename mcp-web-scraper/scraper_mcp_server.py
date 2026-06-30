@@ -43,11 +43,22 @@ except ImportError as e:
     CRO_AVAILABLE = False
     _cro_import_err = str(e)
 
+# ── Technology intelligence (runs after the CRO audit) ───────────────────────
+try:
+    from tech_intelligence import run_tech
+    TECH_AVAILABLE = True
+except ImportError as e:
+    TECH_AVAILABLE = False
+    _tech_import_err = str(e)
+
+    def run_tech(html):  # type: ignore
+        return {"error": "tech_intelligence module not available", "summary": {}}
+
 # ── Config ────────────────────────────────────────────────────────────────────────────
 SCRAPINGBEE_API_KEY = os.environ.get("SCRAPINGBEE_API_KEY", "")
 HUNTER_API_KEY      = os.environ.get("HUNTER_API_KEY", "")
 PORT                = int(os.environ.get("PORT", 8000))
-SERVER_VERSION      = "2.3.0"
+SERVER_VERSION      = "2.4.0"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -157,6 +168,7 @@ def scrape_sync(url: str, run_cro: bool = True, industry: str = "all") -> dict:
         "screenshot_b64": None,
         "screenshot_error": None,
         "cro_audit": None,
+        "tech_intelligence": None,
         "error": None,
     }
 
@@ -230,6 +242,15 @@ def scrape_sync(url: str, run_cro: bool = True, industry: str = "all") -> dict:
             screenshot_b64=result.get("screenshot_b64"),
         )
 
+    # Step 5 — Technology intelligence (tech stack, paid tools, ad pixels)
+    if TECH_AVAILABLE:
+        log.info("Running tech intelligence: %s", url)
+        try:
+            result["tech_intelligence"] = run_tech(html)
+        except Exception as exc:
+            log.warning("Tech intel error for %s: %s", url, exc)
+            result["tech_intelligence"] = {"error": str(exc), "summary": {}}
+
     return result
 
 
@@ -240,6 +261,7 @@ async def healthcheck(request: Request):
         "status":        "ok",
         "server":        f"GTM Scraper API v{SERVER_VERSION}",
         "cro_available": CRO_AVAILABLE,
+        "tech_available": TECH_AVAILABLE,
         "scrapingbee":   bool(SCRAPINGBEE_API_KEY),
         "hunter":        bool(HUNTER_API_KEY),
     })
@@ -285,6 +307,24 @@ async def handle_cro(request: Request):
 
     loop   = asyncio.get_event_loop()
     result = await loop.run_in_executor(None, _run_cro, html, dom_elements, industry, url)
+    return JSONResponse(result)
+
+
+async def handle_tech(request: Request):
+    """POST /tech — run technology intelligence on caller-supplied HTML."""
+    if request.method == "OPTIONS":
+        return JSONResponse({}, status_code=200)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+
+    html = body.get("html", "")
+    if not html:
+        return JSONResponse({"error": "html is required"}, status_code=400)
+
+    loop   = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, run_tech, html)
     return JSONResponse(result)
 
 
@@ -373,6 +413,7 @@ app = Starlette(routes=[
     Route("/",        healthcheck,    methods=["GET"]),
     Route("/scrape",  handle_scrape,  methods=["POST", "OPTIONS"]),
     Route("/cro",     handle_cro,     methods=["POST", "OPTIONS"]),
+    Route("/tech",    handle_tech,    methods=["POST", "OPTIONS"]),
     Route("/hunter",  handle_hunter,  methods=["POST", "OPTIONS"]),
 ])
 
