@@ -54,11 +54,23 @@ except ImportError as e:
     def run_tech(html):  # type: ignore
         return {"error": "tech_intelligence module not available", "summary": {}}
 
+# ── Personalized email writer (final bot in the pipeline) ────────────────────
+try:
+    from email_writer import run_email
+    EMAIL_AVAILABLE = True
+except ImportError as e:
+    EMAIL_AVAILABLE = False
+    _email_import_err = str(e)
+
+    def run_email(lead, openai_key=""):  # type: ignore
+        return {"error": "email_writer module not available", "subject": "", "body": ""}
+
 # ── Config ────────────────────────────────────────────────────────────────────────────
 SCRAPINGBEE_API_KEY = os.environ.get("SCRAPINGBEE_API_KEY", "")
 HUNTER_API_KEY      = os.environ.get("HUNTER_API_KEY", "")
+OPENAI_API_KEY      = os.environ.get("OPENAI_API_KEY", "")
 PORT                = int(os.environ.get("PORT", 8000))
-SERVER_VERSION      = "2.4.0"
+SERVER_VERSION      = "2.5.0"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -262,8 +274,10 @@ async def healthcheck(request: Request):
         "server":        f"GTM Scraper API v{SERVER_VERSION}",
         "cro_available": CRO_AVAILABLE,
         "tech_available": TECH_AVAILABLE,
+        "email_available": EMAIL_AVAILABLE,
         "scrapingbee":   bool(SCRAPINGBEE_API_KEY),
         "hunter":        bool(HUNTER_API_KEY),
+        "openai":        bool(OPENAI_API_KEY),
     })
 
 
@@ -325,6 +339,26 @@ async def handle_tech(request: Request):
 
     loop   = asyncio.get_event_loop()
     result = await loop.run_in_executor(None, run_tech, html)
+    return JSONResponse(result)
+
+
+async def handle_email(request: Request):
+    """POST /email — write a personalized subject + body for one prospect.
+    Body: { lead:{...}, openai_key?:"" }  (openai_key optional; falls back to env)."""
+    if request.method == "OPTIONS":
+        return JSONResponse({}, status_code=200)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+
+    lead       = body.get("lead") or body
+    openai_key = (body.get("openai_key") or OPENAI_API_KEY or "").strip()
+    if not isinstance(lead, dict) or not (lead.get("business_name") or lead.get("website")):
+        return JSONResponse({"error": "lead with at least business_name or website is required"}, status_code=400)
+
+    loop   = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, run_email, lead, openai_key)
     return JSONResponse(result)
 
 
@@ -414,6 +448,7 @@ app = Starlette(routes=[
     Route("/scrape",  handle_scrape,  methods=["POST", "OPTIONS"]),
     Route("/cro",     handle_cro,     methods=["POST", "OPTIONS"]),
     Route("/tech",    handle_tech,    methods=["POST", "OPTIONS"]),
+    Route("/email",   handle_email,   methods=["POST", "OPTIONS"]),
     Route("/hunter",  handle_hunter,  methods=["POST", "OPTIONS"]),
 ])
 
