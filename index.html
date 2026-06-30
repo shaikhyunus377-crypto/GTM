@@ -161,7 +161,7 @@
         <thead>
           <tr>
             <th style="width:32px"><input type="checkbox" id="check-all" onchange="toggleAll(this)"/></th>
-            <th>#</th><th>URL</th><th>Status</th><th>Decision Maker</th><th>Email</th><th>CRO</th><th>Actions</th>
+            <th>#</th><th>URL</th><th>Status</th><th>Decision Maker</th><th>Email</th><th>CRO</th><th>Tech Stack</th><th>Actions</th>
           </tr>
         </thead>
         <tbody id="table-body"></tbody>
@@ -289,6 +289,20 @@
   </div>
 </div>
 
+<!-- Tech Stack Modal -->
+<div id="tech-modal" class="modal-bg" style="display:none" onclick="if(event.target===this)closeTechModal()">
+  <div class="modal-box">
+    <div class="flex justify-between items-start mb-4">
+      <div>
+        <div class="font-bold text-lg" id="tech-modal-title">Technology Intelligence</div>
+        <div class="text-xs text-slate-400 mt-1" id="tech-modal-meta"></div>
+      </div>
+      <button class="text-slate-400 hover:text-white text-xl" onclick="closeTechModal()">✕</button>
+    </div>
+    <div id="tech-modal-body"></div>
+  </div>
+</div>
+
 <script>
 // ── State ────────────────────────────────────────────────────────────────────────────────────
 // url → {status, html, dom_states, screenshot_b64, screenshot_error, cro_audit, hunter_data, error}
@@ -298,6 +312,7 @@ let running       = false;
 let stopFlag      = false;
 let croRunning    = new Set();
 let hunterRunning = new Set();
+let techRunning   = new Set();
 let leadsAbort    = false;
 
 // ── Config ──────────────────────────────────────────────────────────────────────────────────
@@ -736,8 +751,26 @@ function rowHtml(idx) {
     <td>${dmCell(idx)}</td>
     <td>${emailCell(idx)}</td>
     <td>${croCell(idx)}</td>
+    <td>${techCell(idx)}</td>
     <td>${actionsCell(idx)}</td>
   </tr>`;
+}
+function techCell(idx) {
+  const r=results[urls[idx].url]||{}, t=r.tech_intelligence;
+  if (techRunning.has(idx)) return '<span class="text-yellow-400 flex items-center gap-1"><span class="spinner"></span>Detecting…</span>';
+  if (!t) return '<span class="text-slate-600">—</span>';
+  if (t.error) return `<span class="text-red-400 text-xs">Error</span>`;
+  const s=t.summary||{};
+  const chips=[];
+  if (s.cms)            chips.push(`<span class="badge badge-slate">${esc(s.cms)}</span>`);
+  if (s.crm)            chips.push(`<span class="badge badge-red">CRM: ${esc(s.crm)}</span>`);
+  if (s.booking_tools)  chips.push(`<span class="badge badge-yellow">${esc(s.booking_tools)}</span>`);
+  if (s.meta_ads||s.google_ads) chips.push(`<span class="badge badge-red">Ads</span>`);
+  const paid=(t.paid_tools||[]).length;
+  const score=t.commercial_maturity_score??0;
+  const head=`<span class="badge ${score>=60?'badge-green':score>=35?'badge-yellow':'badge-slate'}">${score}/100</span>`;
+  const paidChip=paid?`<span class="badge badge-slate">${paid} paid tool${paid!==1?'s':''}</span>`:'<span class="text-slate-500 text-xs">no paid tools</span>';
+  return `<div class="flex gap-1 items-center flex-wrap text-xs">${head}${chips.join(' ')}${paidChip}<button class="btn btn-slate btn-sm" onclick="showTechModal(${idx})">Detail</button></div>`;
 }
 function dmCell(idx) {
   const r=results[urls[idx].url]||{}, h=r.hunter_data;
@@ -851,6 +884,21 @@ async function startCro(idx) {
     results[u.url].cro_audit=await resp.json();
   } catch(e) { results[u.url].cro_audit={error:e.message}; }
   croRunning.delete(idx); updateRow(idx); updateStats();
+  // Tech intelligence runs right after the CRO audit
+  startTech(idx);
+}
+// Detect website tech stack / paid tools (runs after CRO; /scrape already returns it)
+async function startTech(idx) {
+  if (techRunning.has(idx)) return;
+  const u=urls[idx], r=results[u.url]||{}, base=cfg.api();
+  if (!r.html || !base) return;
+  if (r.tech_intelligence && !r.tech_intelligence.error) return; // already have it
+  techRunning.add(idx); updateRow(idx);
+  try {
+    const resp=await fetch(base+'/tech',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({html:r.html})});
+    results[u.url].tech_intelligence=await resp.json();
+  } catch(e) { results[u.url].tech_intelligence={error:e.message}; }
+  techRunning.delete(idx); updateRow(idx);
 }
 async function runAllCro() {
   const base=cfg.api();
@@ -951,6 +999,36 @@ function showCroModal(idx) {
   document.getElementById('cro-modal').style.display='flex';
 }
 function closeCroModal() { document.getElementById('cro-modal').style.display='none'; }
+
+function showTechModal(idx) {
+  const u=urls[idx], t=(results[u.url]||{}).tech_intelligence;
+  if (!t||t.error) return;
+  const s=t.summary||{};
+  document.getElementById('tech-modal-title').textContent=`Tech Stack — ${u.name||u.url}`;
+  document.getElementById('tech-modal-meta').textContent=`Digital maturity ${t.commercial_maturity_score??0}/100 · ${(t.paid_tools||[]).length} paid tool(s) detected`;
+  const CATS=[
+    ['CMS','cms'],['Page Builder','page_builders'],['Theme','themes'],
+    ['Analytics','analytics'],['Advertising','advertising'],['CRM','crm'],
+    ['Forms','forms'],['Booking','booking_tools'],['Live Chat','chat_tools'],
+    ['Heatmaps','heatmaps'],['Email Marketing','email_marketing'],['Business Tools','business_tools'],
+  ];
+  const rows=CATS.map(([label,key])=>{
+    const arr=t[key]||[];
+    if (!arr.length) return '';
+    return `<div class="flex gap-2 py-1 border-b border-slate-700/50"><div class="text-slate-400 text-xs" style="width:130px;flex-shrink:0">${label}</div><div class="flex gap-1 flex-wrap">${arr.map(x=>`<span class="badge badge-slate">${esc(x)}</span>`).join('')}</div></div>`;
+  }).filter(Boolean).join('');
+  const paid=(t.paid_tools||[]);
+  const paidBlock=paid.length
+    ? `<div class="mb-3"><div class="text-xs text-slate-400 mb-1">💰 Paid / commercial tools</div><div class="flex gap-1 flex-wrap">${paid.map(x=>`<span class="badge badge-red">${esc(x)}</span>`).join('')}</div></div>`
+    : `<div class="text-xs text-slate-500 mb-3">No paid marketing/CRM tooling detected — low digital maturity.</div>`;
+  const sigs=(t.qualification_signals||[]);
+  const sigBlock=sigs.length
+    ? `<div class="mt-3"><div class="text-xs text-slate-400 mb-1">🎯 Sales angles</div>${sigs.map(x=>`<div class="text-xs text-slate-300">• ${esc(x)}</div>`).join('')}</div>`
+    : '';
+  document.getElementById('tech-modal-body').innerHTML=paidBlock+(rows||'<div class="text-xs text-slate-500">No recognizable technologies detected.</div>')+sigBlock;
+  document.getElementById('tech-modal').style.display='flex';
+}
+function closeTechModal() { document.getElementById('tech-modal').style.display='none'; }
 
 // ── Screenshot modal ───────────────────────────────────────────────────────────────────────────────
 let _ssIdx=null;
