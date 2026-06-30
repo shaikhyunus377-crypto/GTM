@@ -122,6 +122,7 @@
       <button class="btn btn-slate btn-sm" onclick="selectNone()">Deselect all</button>
       <button class="btn btn-purple btn-sm" onclick="runAllCro()">▶ Run all CRO</button>
       <button class="btn btn-yellow btn-sm" onclick="runAllHunter()">👤 Run all DM</button>
+      <button class="btn btn-teal btn-sm" onclick="generateAllEmails()">✉ Write all emails</button>
       <button class="btn btn-green btn-sm" onclick="downloadAll()">↓ Download all</button>
       <button class="btn btn-slate btn-sm" onclick="clearAll()">✕ Clear</button>
     </div>
@@ -303,6 +304,35 @@
   </div>
 </div>
 
+<!-- Personalized Email Modal -->
+<div id="email-modal" class="modal-bg" style="display:none" onclick="if(event.target===this)closeEmailModal()">
+  <div class="modal-box">
+    <div class="flex justify-between items-start mb-4">
+      <div>
+        <div class="font-bold text-lg" id="email-modal-title">Personalized Email</div>
+        <div class="text-xs text-slate-400 mt-1" id="email-modal-meta"></div>
+      </div>
+      <button class="text-slate-400 hover:text-white text-xl" onclick="closeEmailModal()">✕</button>
+    </div>
+    <div class="mb-2">
+      <div class="text-xs text-slate-400 mb-1">Subject line <span id="email-subject-alts" class="text-slate-500"></span></div>
+      <div class="flex gap-2 items-center">
+        <input id="email-subject" class="w-full" type="text"/>
+        <button class="btn btn-slate btn-sm" onclick="copyEl('email-subject')">Copy</button>
+      </div>
+    </div>
+    <div class="mb-3">
+      <div class="text-xs text-slate-400 mb-1">Body</div>
+      <textarea id="email-body" rows="14" class="w-full" style="font-family:inherit;line-height:1.5"></textarea>
+    </div>
+    <div class="flex gap-2 flex-wrap">
+      <button class="btn btn-teal btn-sm" onclick="copyEl('email-body')">📋 Copy body</button>
+      <button class="btn btn-slate btn-sm" onclick="copyEmailAll()">📋 Copy subject + body</button>
+      <button class="btn btn-green btn-sm" onclick="downloadEmail()">↓ Download .txt</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // ── State ────────────────────────────────────────────────────────────────────────────────────
 // url → {status, html, dom_states, screenshot_b64, screenshot_error, cro_audit, hunter_data, error}
@@ -313,6 +343,7 @@ let stopFlag      = false;
 let croRunning    = new Set();
 let hunterRunning = new Set();
 let techRunning   = new Set();
+let emailRunning  = new Set();
 let leadsAbort    = false;
 
 // ── Config ──────────────────────────────────────────────────────────────────────────────────
@@ -803,6 +834,10 @@ function actionsCell(idx) {
   else if (st==='done') parts.push(`<button class="btn btn-slate btn-sm" onclick="runOne(${idx})">&#x21BA;</button>`);
   if (st==='done'&&(!h||h.error)&&!hunterRunning.has(idx)) parts.push(`<button class="btn btn-yellow btn-sm" onclick="lookupHunter(${idx})">👤 DM</button>`);
   if (r.html&&!croRunning.has(idx)) parts.push(`<button class="btn btn-purple btn-sm" onclick="startCro(${idx})">${r.cro_audit?'&#x21BA; CRO':'⚙ CRO'}</button>`);
+  if (st==='done') {
+    if (emailRunning.has(idx)) parts.push(`<button class="btn btn-teal btn-sm" disabled><span class="spinner"></span> Email</button>`);
+    else parts.push(`<button class="btn btn-teal btn-sm" onclick="${r.email?`showEmailModal(${idx})`:`generateEmail(${idx})`}">✉ ${r.email?'Email':'Write email'}</button>`);
+  }
   if (r.screenshot_b64) parts.push(`<button class="btn btn-slate btn-sm" onclick="showScreenshot(${idx})">🖼 SS</button>`);
   else if (r.screenshot_error&&st==='done') parts.push(`<button class="btn btn-slate btn-sm" disabled title="Screenshot failed: ${esc(r.screenshot_error)}">🖼 SS</button>`);
   if (h&&h.found) parts.push(`<button class="btn btn-green btn-sm" onclick="dlContact(${idx})">↓ CSV</button>`);
@@ -1029,6 +1064,72 @@ function showTechModal(idx) {
   document.getElementById('tech-modal').style.display='flex';
 }
 function closeTechModal() { document.getElementById('tech-modal').style.display='none'; }
+
+// ── Personalized email ───────────────────────────────────────────────────────
+function buildLeadRecord(idx) {
+  const u=urls[idx], r=results[u.url]||{};
+  const h=r.hunter_data, c=(h&&h.top_contacts&&h.top_contacts[0])||{};
+  return {
+    business_name: u.name||'', website: u.url, category: u.category||'', city: u.city||'',
+    contact_name: c.name||'', contact_role: c.position||'', contact_email: c.email||'',
+    google_rating: u.rating, google_review_count: u.reviews,
+    cro: r.cro_audit||{}, tech: r.tech_intelligence||{},
+  };
+}
+async function generateEmail(idx) {
+  if (emailRunning.has(idx)) return;
+  const u=urls[idx], base=cfg.api();
+  if (!base) { alert('Set API URL'); return; }
+  emailRunning.add(idx); updateRow(idx);
+  try {
+    const resp=await fetch(base+'/email',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({lead:buildLeadRecord(idx)})});
+    const data=await resp.json();
+    results[u.url].email = resp.ok && !data.error ? data : {error:data.error||`HTTP ${resp.status}`};
+  } catch(e) { results[u.url].email={error:e.message}; }
+  emailRunning.delete(idx); updateRow(idx);
+  const e=results[u.url].email;
+  if (e&&!e.error) showEmailModal(idx); else if (e&&e.error) alert('Email generation failed: '+e.error);
+}
+async function generateAllEmails() {
+  const base=cfg.api();
+  if (!base) { alert('Set API URL'); return; }
+  const pending=urls.map((_,i)=>i).filter(i=>{const r=results[urls[i].url]||{};return r.status==='done'&&(!r.email||r.email.error)&&!emailRunning.has(i);});
+  if (!pending.length) { alert('No completed leads to write emails for. Run/scrape first.'); return; }
+  const pool=[...pending];
+  await Promise.all(Array.from({length:Math.min(cfg.workers(),pool.length)},async()=>{while(pool.length)await generateEmail(pool.shift());}));
+}
+let _emailIdx=null;
+function showEmailModal(idx) {
+  const u=urls[idx], e=(results[u.url]||{}).email;
+  if (!e||e.error) return;
+  _emailIdx=idx;
+  document.getElementById('email-modal-title').textContent=`Email — ${u.name||u.url}`;
+  document.getElementById('email-modal-meta').textContent=(e.generated_by==='openai'?'AI-polished':'Personalized')+' · edit before sending';
+  document.getElementById('email-subject').value=e.subject||'';
+  document.getElementById('email-body').value=e.body||'';
+  const alts=(e.subject_variants||[]).slice(1);
+  document.getElementById('email-subject-alts').innerHTML = alts.length
+    ? '— alternatives: '+alts.map(s=>`<a href="#" onclick="document.getElementById('email-subject').value=this.textContent;return false" class="text-indigo-400 hover:underline">${esc(s)}</a>`).join(' · ')
+    : '';
+  document.getElementById('email-modal').style.display='flex';
+}
+function closeEmailModal() { document.getElementById('email-modal').style.display='none'; }
+function copyEl(id) { const el=document.getElementById(id); el.select&&el.select(); navigator.clipboard.writeText(el.value).then(()=>toast('Copied')); }
+function copyEmailAll() {
+  const s=document.getElementById('email-subject').value, b=document.getElementById('email-body').value;
+  navigator.clipboard.writeText(`Subject: ${s}\n\n${b}`).then(()=>toast('Subject + body copied'));
+}
+function downloadEmail() {
+  if (_emailIdx==null) return;
+  const s=document.getElementById('email-subject').value, b=document.getElementById('email-body').value;
+  _dl(`Subject: ${s}\n\n${b}\n`, `${safe(urls[_emailIdx])}_email.txt`, 'text/plain');
+}
+function toast(msg) {
+  let t=document.getElementById('_toast');
+  if (!t) { t=document.createElement('div'); t.id='_toast'; t.style.cssText='position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#1e293b;color:#fff;padding:8px 16px;border-radius:8px;font-size:13px;z-index:9999;border:1px solid #334155'; document.body.appendChild(t); }
+  t.textContent=msg; t.style.opacity='1';
+  clearTimeout(t._h); t._h=setTimeout(()=>{t.style.opacity='0';}, 1500);
+}
 
 // ── Screenshot modal ───────────────────────────────────────────────────────────────────────────────
 let _ssIdx=null;
