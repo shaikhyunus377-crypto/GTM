@@ -478,10 +478,11 @@ async function apifySearch(token, searchTerm, maxResults, country) {
   let datasetId  = runData.data?.defaultDatasetId;
   if (!runId) throw new Error('Apify did not return a run ID');
 
-  // Poll
-  let status='READY', pollFails=0;
+  // Poll (with a hard cap so a stuck/queued run can't load forever)
+  let status='READY', pollFails=0, polls=0;
   while ((status==='READY'||status==='RUNNING') && !leadsAbort) {
     await new Promise(r=>setTimeout(r,3500));
+    if (++polls>70) throw new Error('Apify run timed out (~4 min). The Google Maps actor may be queued or out of credits — check your Apify account.');
     try {
       const sr = await fetch(`https://api.apify.com/v2/actor-runs/${runId}?token=${encodeURIComponent(token)}`);
       const sd = await sr.json();
@@ -562,6 +563,27 @@ async function startLeadsSearch() {
   const seenPlaces = new Set();  // deduplicate by placeId / title+address
   const keywords   = nicheKeywords(niche);
   const countryStr = country ? `, ${country}` : '';
+  let   totalAdded = 0;          // running total pushed into the table
+
+  // Push any newly-found leads into the table NOW (incremental render so the
+  // user sees real data appear instead of staring at a spinner).
+  function flushToTable() {
+    const existingSet=new Set(urls.map(u=>u.url));
+    let newly=0;
+    for (const [website,info] of found) {
+      if (existingSet.has(website)) continue;
+      urls.push({url:website, name:info.title||website.replace(/^https?:\/\/(www\.)?/,'').split('/')[0],
+        reviews:info.reviews, rating:info.rating, address:info.address, phone:info.phone, category:info.category});
+      existingSet.add(website); newly++; totalAdded++;
+    }
+    if (newly>0) {
+      document.getElementById('drop-zone').classList.add('hidden');
+      document.getElementById('main-section').classList.remove('hidden');
+      document.getElementById('url-heading').textContent=`${urls.length} URL${urls.length!==1?'s':''} found`;
+      renderTable(); updateStats();
+    }
+    return newly;
+  }
 
   // Helper: process raw Apify items into found map and return discovered zip codes
   function processItems(items, discoveredZips) {
@@ -604,6 +626,7 @@ async function startLeadsSearch() {
     }
     setStatus(`📍 Found ${discoveredZips.size} zip codes in ${city}, ${found.size}/${count} leads so far…`,
       `Zip codes: ${[...discoveredZips.keys()].slice(0,8).join(', ')}${discoveredZips.size>8?'…':''}`);
+    flushToTable();   // show Phase 1 leads immediately
   } catch(e) {
     setStatus(`❌ ${e.message}`, '', true);
     btn.disabled=false;
@@ -661,6 +684,7 @@ async function startLeadsSearch() {
       }
       setStatus(`📍 Zip ${zip||'N/A'} done (+${added} leads) — total ${found.size}/${count}`, `Searched: "${searchTerm}"`);
       setBar(found.size, count);
+      flushToTable();   // render new leads as each search completes
     } catch(e) {
       // Non-fatal: skip this zip/keyword combo
       setStatus(`⚠️ ${e.message} — skipping, continuing…`, detailText.textContent);
@@ -679,19 +703,12 @@ async function startLeadsSearch() {
   setStatus(`✓ ${found.size} lead${found.size!==1?'s':''} found! Adding to table…`,'');
   setBar(found.size,count);
 
-  const existingSet=new Set(urls.map(u=>u.url));
-  let added=0;
-  for (const [website,info] of found) {
-    if (existingSet.has(website)) continue;
-    urls.push({url:website, name:info.title||website.replace(/^https?:\/\/(www\.)?/,'').split('/')[0],
-      reviews:info.reviews, rating:info.rating, address:info.address, phone:info.phone, category:info.category});
-    added++;
-  }
+  flushToTable();   // final sync (most already rendered incrementally)
 
   document.getElementById('drop-zone').classList.add('hidden');
   document.getElementById('main-section').classList.remove('hidden');
   document.getElementById('url-heading').textContent=`${urls.length} URL${urls.length!==1?'s':''} found`;
-  document.getElementById('url-subheading').textContent=`${added} new leads added from Google Maps · ${city} · ${discoveredZips.size} zip codes searched`;
+  document.getElementById('url-subheading').textContent=`${totalAdded} new leads added from Google Maps · ${city} · ${discoveredZips.size} zip codes searched`;
   renderTable(); updateStats();
   setTimeout(closeLeadsModal, 900);
 }
