@@ -71,7 +71,7 @@ SCRAPINGBEE_API_KEY = os.environ.get("SCRAPINGBEE_API_KEY", "")
 HUNTER_API_KEY      = os.environ.get("HUNTER_API_KEY", "")
 OPENAI_API_KEY      = os.environ.get("OPENAI_API_KEY", "")
 PORT                = int(os.environ.get("PORT", 8000))
-SERVER_VERSION      = "2.6.1"
+SERVER_VERSION      = "2.7.0"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)

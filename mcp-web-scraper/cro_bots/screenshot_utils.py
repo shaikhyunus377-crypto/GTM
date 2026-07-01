@@ -1,10 +1,15 @@
 """
 screenshot_utils.py — Crop and annotate page screenshots per CRO issue.
 
-Given the full-page screenshot (base64 PNG) + the dom_states elements (which
-carry real bounding boxes), this locates WHERE each CRO issue lives on the page,
-crops that region, and draws a red highlight around the offending element(s) so
-the prospect can literally see the problem.
+Produces an evidence image per issue in the reference style:
+  • a baked-in header band: ISSUE / Evidence Strategy / System Match Confidence /
+    Context Target String
+  • a tight ORANGE box around the specific offending element when it can be
+    located on the *visible* page (high confidence)
+  • a clean orange section frame ("Contextual Layout Framing Viewport") when the
+    issue is layout-level and no single element applies (low confidence)
+  • nothing (crop skipped) when a specific element exists only on a hidden /
+    off-slide carousel panel — never highlight blank space.
 
 Requires Pillow. Gracefully no-ops if not installed.
 """
@@ -14,45 +19,242 @@ import io
 import re
 
 try:
-    from PIL import Image, ImageDraw
+    from PIL import Image, ImageDraw, ImageFont
     PIL_AVAILABLE = True
 except ImportError:
     PIL_AVAILABLE = False
 
-LAYOUT_WIDTH = 1440   # window width used when DOM coordinates were captured
+LAYOUT_WIDTH = 1440
 PAD_TOP      = 70
 PAD_BOTTOM   = 90
-MIN_HEIGHT   = 220    # never return a sliver crop
-MAX_HEIGHT   = 900    # cap crop height for readability
-OUT_MAX_W    = 1000   # downscale wide crops to keep payload small
-MAX_CROPS    = 10     # safety cap on crops per report
+MIN_HEIGHT   = 240
+MAX_HEIGHT   = 940
+OUT_MAX_W    = 1000
+MAX_CROPS    = 10
+HEADER_H     = 96
+
+ORANGE       = (245, 158, 11, 255)
+ORANGE_FILL  = (245, 158, 11, 45)
+
+
+# ── fonts (Pillow >=10.1 gives a bundled sizeable default — no system dep) ────
+
+def _font(size: int):
+    try:
+        return ImageFont.load_default(size=size)
+    except Exception:
+        try:
+            return ImageFont.load_default()
+        except Exception:
+            return None
 
 
 # ── image helpers ────────────────────────────────────────────────────────────
 
-def _decode(screenshot_b64: str):
+def _decode(b64: str):
     if not PIL_AVAILABLE:
         return None
     try:
-        return Image.open(io.BytesIO(base64.b64decode(screenshot_b64))).convert("RGBA")
+        return Image.open(io.BytesIO(base64.b64decode(b64))).convert("RGBA")
     except Exception:
         return None
 
 
 def _encode(img) -> str:
-    if img.width > OUT_MAX_W:
-        ratio = OUT_MAX_W / img.width
-        img = img.resize((OUT_MAX_W, int(img.height * ratio)))
     buf = io.BytesIO()
     img.convert("RGB").save(buf, format="PNG", optimize=True)
     return base64.b64encode(buf.getvalue()).decode()
 
 
-def _crop_and_highlight(img, rects: list[dict], region: tuple[int, int] | None) -> str | None:
-    """rects/region are in LAYOUT (CSS 1440) px. Returns base64 PNG or None."""
-    full_w, full_h = img.size
-    scale = full_w / LAYOUT_WIDTH
+_ASCII_MAP = {
+    "—": "-", "–": "-", "‒": "-", "−": "-",
+    "‘": "'", "’": "'", "“": '"', "”": '"',
+    "•": "*", "…": "...", " ": " ",
+}
 
+def _safe(s: str) -> str:
+    """Header font only covers Latin text — map smart punctuation to ASCII and
+    drop emoji / non-Latin so nothing renders as a 'tofu' box."""
+    s = "".join(_ASCII_MAP.get(ch, ch) for ch in (s or ""))
+    return "".join(ch for ch in s if 32 <= ord(ch) <= 255).strip()
+
+def _short(s: str, n: int) -> str:
+    s = _safe(s)
+    return s if len(s) <= n else s[: n - 1].rstrip() + "..."
+
+
+# ── DOM helpers ──────────────────────────────────────────────────────────────
+
+def _bbox(el: dict) -> dict:
+    return (el.get("states", {}).get("default", {}).get("bbox", {})) or {}
+
+def _rect(el: dict):
+    if el.get("visible") is False:          # hidden / inactive carousel slide
+        return None
+    b = _bbox(el)
+    y, w, h = b.get("y", 0), b.get("width", 0), b.get("height", 0)
+    if y > 0 and w > 0 and h > 0:
+        return {"x": b.get("x", 0), "y": y, "width": w, "height": h}
+    return None
+
+def _text(el: dict) -> str:
+    return (el.get("text") or "").lower()
+
+def _norm(t: str) -> str:
+    return re.sub(r"\s+", " ", (t or "")).strip().lower()
+
+
+BOOKING_RE = re.compile(r"book|schedul|appoint|reserv|consult|get\s*start|sign\s*up|free\s*trial|contact|call\s*now|get\s*quote|request|today|appointment", re.I)
+REVIEW_RE  = re.compile(r"review|testimonial|rating|stars?|\d\.\d\s*/\s*5|verified|what our|clients? say|patients? say", re.I)
+TRUST_RE   = re.compile(r"certif|accredit|award|insur|licens|bbb|trustpilot|guarantee|member of|years? (of )?experience|before\s*&?\s*after", re.I)
+PHONE_RE   = re.compile(r"\+?\d[\d\s\-().]{6,}\d")
+
+
+def _category(iid: str) -> str:
+    if iid in ("heading_hierarchy", "headings", "h1_identity", "h1_missing", "h1",
+               "hero_value_proposition", "offer_clarity", "page_meta"):
+        return "MESSAGE CLARITY"
+    if iid in ("cta_label_quality", "cta_labels", "conversion_form", "forms",
+               "form_missing", "cta_above_fold", "cta_hierarchy", "phone_cta",
+               "hero_primary_cta_missing", "hero_action_clarity", "mobile_tap_targets"):
+        return "CTA CLARITY"
+    if iid in ("trust_signals", "social_proof", "social_proof_near_cta",
+               "lazy_load_images", "images"):
+        return "TRUST CLARITY"
+    if iid in ("nav_overload", "page_structure", "duplicate_ids"):
+        return "NAVIGATION FRICTION"
+    if iid in ("og_social_meta", "schema_incomplete"):
+        return "SEO CLARITY"
+    return "UX CLARITY"
+
+
+def _quoted(issue: dict) -> list[str]:
+    txt = " ".join((issue.get("findings") or []) + (issue.get("evidence") or []))
+    return [_norm(q) for q in re.findall(r"[\"']([^\"']{3,70})[\"']", txt)]
+
+
+# ── geometry / blank guards ──────────────────────────────────────────────────
+
+def _valid_geom(r: dict, page_h: float) -> bool:
+    x, y, w, h = r["x"], r["y"], r["width"], r["height"]
+    if w < 8 or h < 8:                       return False
+    if y <= 0 or y >= page_h - 4:            return False
+    if x < -30 or x > LAYOUT_WIDTH + 30:     return False
+    if x + w < 10:                           return False
+    return True
+
+def _is_blank(img, r: dict, scale: float) -> bool:
+    try:
+        x0 = max(0, int(r["x"] * scale));                 y0 = max(0, int(r["y"] * scale))
+        x1 = min(img.width, int((r["x"] + r["width"]) * scale))
+        y1 = min(img.height, int((r["y"] + r["height"]) * scale))
+        if x1 - x0 < 6 or y1 - y0 < 6:
+            return True
+        lo, hi = img.crop((x0, y0, x1, y1)).convert("L").getextrema()
+        return (hi - lo) < 8
+    except Exception:
+        return False
+
+
+# ── per-issue location ───────────────────────────────────────────────────────
+
+def _locate(issue: dict, dom: list[dict]):
+    """Return (targets, region, category, allow_frame).
+    targets = list of (rect, element) for the specific offending element(s)."""
+    iid = (issue.get("id") or "").lower()
+    cat = _category(iid)
+    H   = ("h1", "h2", "h3", "h4", "h5", "h6")
+
+    def vis(pred, lim=8):
+        out = []
+        for el in dom:
+            r = _rect(el)
+            if r and pred(el):
+                out.append((r, el))
+            if len(out) >= lim:
+                break
+        return out
+
+    # affected_elements that already carry coordinates
+    coord = []
+    for e in issue.get("affected_elements") or []:
+        y = e.get("y", 0); w = e.get("w", e.get("width", 0)); h = e.get("h", e.get("height", 0))
+        if y and (w or h):
+            coord.append(({"x": e.get("x", 0), "y": y, "width": max(w, 40), "height": max(h, 24)}, e))
+    if coord:
+        return coord[:6], None, cat, False
+
+    if iid in ("heading_hierarchy", "headings"):
+        quoted = _quoted(issue)
+        t = []
+        for el in dom:
+            if el.get("tag") in H:
+                r = _rect(el)
+                if not r:
+                    continue
+                nt = _norm(el.get("text", ""))
+                if not quoted or any(nt and (nt in q or q in nt) for q in quoted):
+                    t.append((r, el))
+            if len(t) >= 6:
+                break
+        return t, None, cat, False
+    if iid in ("h1_identity", "h1_missing", "h1"):
+        return vis(lambda e: e.get("tag") == "h1", 1), (0, 700), cat, False
+    if iid in ("cta_label_quality", "cta_labels"):
+        r = vis(lambda e: e.get("tag") in ("a", "button") and (e.get("text") or "") == (e.get("text") or "").upper() and len((e.get("text") or "")) > 2)
+        return (r or vis(lambda e: e.get("tag") in ("a", "button"))), None, cat, False
+    if iid in ("conversion_form", "forms", "form_missing"):
+        return (vis(lambda e: e.get("tag") == "form") or
+                vis(lambda e: e.get("tag") in ("a", "button") and BOOKING_RE.search(_text(e)))), None, cat, False
+    if iid in ("phone_cta", "phone"):
+        return vis(lambda e: bool(PHONE_RE.search(_text(e)))), None, cat, False
+    if iid in ("social_proof",):
+        return vis(lambda e: bool(REVIEW_RE.search(_text(e)))), (0, 1200), cat, True
+    if iid in ("trust_signals",):
+        return vis(lambda e: bool(TRUST_RE.search(_text(e)))), None, cat, False
+    if iid in ("lazy_load_images", "images"):
+        return vis(lambda e: e.get("tag") == "img", 5), None, cat, False
+    if iid in ("mobile_tap_targets",):
+        return vis(lambda e: e.get("tag") in ("a", "button") and BOOKING_RE.search(_text(e))), None, cat, False
+    if iid in ("duplicate_ids",):
+        dup = {str(a.get("id")) for a in issue.get("affected_elements") or [] if a.get("id")}
+        return vis(lambda e: str(e.get("id")) in dup), None, cat, False
+    if iid in ("cta_above_fold",):
+        return vis(lambda e: e.get("tag") in ("a", "button") and BOOKING_RE.search(_text(e)) and _bbox(e).get("y", 9999) <= 900), (0, 800), cat, True
+
+    HERO = {"hero_carousel", "hero_primary_cta_missing", "hero_value_proposition",
+            "hero_action_clarity", "offer_clarity", "cta_hierarchy"}
+    if iid in HERO:
+        return [], (0, 900), cat, True
+    if iid in ("social_proof_near_cta",):
+        return [], (0, 1200), cat, True
+    if iid in ("nav_overload", "page_structure"):
+        return vis(lambda e: e.get("tag") in ("header", "nav")), (0, 240), cat, True
+
+    return [], None, cat, False
+
+
+# ── rendering ────────────────────────────────────────────────────────────────
+
+def _compose(crop, title, cat, conf, context) -> str:
+    W = crop.width
+    canvas = Image.new("RGB", (W, HEADER_H + crop.height), (255, 255, 255))
+    canvas.paste(crop.convert("RGB"), (0, HEADER_H))
+    d = ImageDraw.Draw(canvas)
+    f1, f2 = _font(20), _font(14)
+    if f1:
+        d.text((16, 12), f"ISSUE: {_short(title, 56)}  ({cat})", fill=(17, 24, 39), font=f1)
+    if f2:
+        d.text((16, 46), f"Evidence Strategy: SECTION      |      System Match Confidence: {conf:.2f}",
+               fill=(100, 116, 139), font=f2)
+        d.text((16, 68), f'Context Target String: "{_short(context, 74)}"',
+               fill=(100, 116, 139), font=f2)
+    d.line([(0, HEADER_H - 1), (W, HEADER_H - 1)], fill=(226, 232, 240), width=1)
+    return _encode(canvas)
+
+
+def _render(img, rects, region, scale, title, cat, conf, context, frame: bool):
+    full_w, full_h = img.size
     if rects:
         y_top    = min(r["y"] for r in rects)
         y_bottom = max(r["y"] + r["height"] for r in rects)
@@ -70,10 +272,12 @@ def _crop_and_highlight(img, rects: list[dict], region: tuple[int, int] | None) 
     if crop_bottom <= crop_top:
         return None
 
-    cropped = img.crop((0, crop_top, full_w, crop_bottom))
+    crop = img.crop((0, crop_top, full_w, crop_bottom)).convert("RGB")
+    draw = ImageDraw.Draw(crop, "RGBA")
 
-    if rects:
-        draw = ImageDraw.Draw(cropped, "RGBA")
+    if frame:
+        draw.rectangle([4, 4, crop.width - 5, crop.height - 5], outline=ORANGE, width=6)
+    else:
         for r in rects:
             x = int(r["x"] * scale)
             y = int(r["y"] * scale) - crop_top
@@ -81,180 +285,53 @@ def _crop_and_highlight(img, rects: list[dict], region: tuple[int, int] | None) 
             h = int(r["height"] * scale)
             if w < 4 or h < 4:
                 continue
-            # padded halo so the box frames the element rather than covering it
-            draw.rectangle([x - 4, y - 4, x + w + 4, y + h + 4],
-                           fill=(255, 0, 0, 38), outline=(220, 30, 30, 235), width=3)
-    return _encode(cropped)
+            draw.rectangle([x - 5, y - 5, x + w + 5, y + h + 5],
+                           fill=ORANGE_FILL, outline=ORANGE, width=4)
+
+    if crop.width > OUT_MAX_W:
+        ratio = OUT_MAX_W / crop.width
+        crop = crop.resize((OUT_MAX_W, int(crop.height * ratio)))
+
+    return _compose(crop, title, cat, conf, context)
 
 
-# ── DOM element helpers ──────────────────────────────────────────────────────
-
-def _bbox(el: dict) -> dict:
-    return (el.get("states", {}).get("default", {}).get("bbox", {})) or {}
-
-def _rect(el: dict) -> dict | None:
-    # Browser-reported visibility: an element on an inactive carousel slide is
-    # hidden (opacity/aria-hidden) even though it has a bounding box — never
-    # highlight it.
-    if el.get("visible") is False:
-        return None
-    b = _bbox(el)
-    y, w, h = b.get("y", 0), b.get("width", 0), b.get("height", 0)
-    if y > 0 and w > 0 and h > 0:
-        return {"x": b.get("x", 0), "y": y, "width": w, "height": h}
-    return None
-
-def _text(el: dict) -> str:
-    return (el.get("text") or "").lower()
-
-
-BOOKING_RE = re.compile(r"book|schedul|appoint|reserv|consult|get start|sign up|free trial|contact|call now|get quote|request", re.I)
-REVIEW_RE  = re.compile(r"review|testimonial|rating|stars?|\d\.\d\s*/\s*5|verified|what our|clients? say", re.I)
-TRUST_RE   = re.compile(r"certif|accredit|award|insur|licens|bbb|trustpilot|guarantee|member of|years? (of )?experience", re.I)
-PHONE_RE   = re.compile(r"\+?\d[\d\s\-().]{6,}\d")
-
-
-def _rects_for_issue(issue: dict, dom: list[dict]) -> tuple[list[dict], tuple[int, int] | None]:
-    """Return (highlight_rects, fallback_region) for a given issue."""
-    iid = (issue.get("id") or "").lower()
-
-    # 1) affected_elements that already carry coordinates (e.g. mobile tap targets)
-    coord_rects = []
-    for e in issue.get("affected_elements") or []:
-        y = e.get("y", 0); h = e.get("h", e.get("height", 0)); w = e.get("w", e.get("width", 0))
-        if y and (w or h):
-            coord_rects.append({"x": e.get("x", 0), "y": y, "width": max(w, 40), "height": max(h, 24)})
-    if coord_rects:
-        return coord_rects[:6], None
-
-    def pick(pred, limit=6):
-        out = []
-        for el in dom:
-            r = _rect(el)
-            if r and pred(el):
-                out.append(r)
-            if len(out) >= limit:
-                break
-        return out
-
-    headings = ("h1", "h2", "h3", "h4", "h5", "h6")
-
-    # 2) map by issue id → DOM elements
-    if iid in ("h1_identity", "h1_missing", "h1"):
-        r = pick(lambda e: e.get("tag") == "h1", limit=1) or pick(lambda e: e.get("tag") == "h2", limit=1)
-        return r, (0, 700)
-    if iid in ("heading_hierarchy", "headings"):
-        # No region fallback: if the actual heading elements can't be located on
-        # the visible page (e.g. they live on inactive carousel slides), we skip
-        # the crop entirely rather than box blank space.
-        return pick(lambda e: e.get("tag") in headings, limit=8), None
-    if iid in ("cta_above_fold",):
-        r = pick(lambda e: e.get("tag") in ("a", "button") and BOOKING_RE.search(_text(e)) and _bbox(e).get("y", 9999) <= 900)
-        return r, (0, 800)
-    if iid in ("cta_label_quality", "cta_labels"):
-        r = pick(lambda e: e.get("tag") in ("a", "button") and _text(e) and (e.get("text") or "") == (e.get("text") or "").upper() and len((e.get("text") or "")) > 2)
-        return (r or pick(lambda e: e.get("tag") in ("a", "button"))), None
-    if iid in ("conversion_form", "form_missing", "forms"):
-        r = pick(lambda e: e.get("tag") == "form")
-        r = r or pick(lambda e: e.get("tag") in ("a", "button") and BOOKING_RE.search(_text(e)))
-        return r, None
-    if iid in ("phone_cta", "phone"):
-        return pick(lambda e: PHONE_RE.search(_text(e))), None
-    if iid in ("social_proof",):
-        return pick(lambda e: REVIEW_RE.search(_text(e))), None
-    if iid in ("trust_signals",):
-        return pick(lambda e: TRUST_RE.search(_text(e))), None
-    if iid in ("lazy_load_images", "images"):
-        return pick(lambda e: e.get("tag") == "img", limit=5), None
-    if iid in ("mobile_tap_targets",):
-        return pick(lambda e: e.get("tag") in ("a", "button") and BOOKING_RE.search(_text(e))), None
-    if iid in ("duplicate_ids",):
-        dup_ids = {str(a.get("id")) for a in issue.get("affected_elements") or [] if a.get("id")}
-        return pick(lambda e: str(e.get("id")) in dup_ids), None
-
-    # 3) hero / structural findings with no element handle → region only
-    HERO = {"hero_carousel", "hero_primary_cta_missing", "hero_value_proposition",
-            "hero_action_clarity", "offer_clarity", "cta_hierarchy"}
-    if iid in HERO:
-        return [], (0, 900)
-    if iid in ("social_proof_near_cta",):
-        return [], (0, 1200)
-    if iid in ("nav_overload", "page_structure"):
-        return pick(lambda e: e.get("tag") in ("header", "nav")), (0, 240)
-
-    # 4) pure <head>/meta findings (og, schema, page_meta) — nothing to point at
-    return [], None
-
-
-def _valid_geom(r: dict, page_h: float) -> bool:
-    """Reject boxes that aren't actually on the visible canvas — e.g. inactive
-    carousel slides translated off-screen, or hidden elements."""
-    x, y, w, h = r["x"], r["y"], r["width"], r["height"]
-    if w < 8 or h < 8:
-        return False
-    if y <= 0 or y >= page_h - 4:          # off the top or below the page
-        return False
-    if x < -30 or x > LAYOUT_WIDTH + 30:   # translated off to a side slide
-        return False
-    if x + w < 10:                          # entirely off the left
-        return False
-    return True
-
-
-def _is_blank_region(img, r: dict, scale: float) -> bool:
-    """True if the element's box sits over essentially empty/uniform pixels
-    (a blank margin), meaning there's nothing real to highlight there."""
-    try:
-        x0 = max(0, int(r["x"] * scale));            y0 = max(0, int(r["y"] * scale))
-        x1 = min(img.width, int((r["x"] + r["width"]) * scale))
-        y1 = min(img.height, int((r["y"] + r["height"]) * scale))
-        if x1 - x0 < 6 or y1 - y0 < 6:
-            return True
-        gray = img.crop((x0, y0, x1, y1)).convert("L")
-        lo, hi = gray.getextrema()
-        return (hi - lo) < 8               # near-uniform → blank
-    except Exception:
-        return False
-
-
-def attach_crops(issues: list[dict], screenshot_b64: str | None, dom_elements: list[dict] | None = None) -> None:
-    """
-    Mutate each issue in-place: add 'screenshot_crop' (base64 PNG) where a
-    location on the page can be determined. Elements that aren't genuinely
-    visible (off-slide carousel items, hidden nodes, blank margins) are dropped;
-    if an element-targeted issue has no valid visible element, its crop is
-    skipped rather than highlighting empty space. Safe with missing PIL/screenshot/dom.
-    """
+def attach_crops(issues: list[dict], screenshot_b64, dom_elements=None) -> None:
     if not screenshot_b64 or not PIL_AVAILABLE:
         return
     img = _decode(screenshot_b64)
     if img is None:
         return
-    dom = dom_elements or []
-    scale   = img.width / LAYOUT_WIDTH
-    page_h  = img.height / scale            # page height in layout px
+    dom    = dom_elements or []
+    scale  = img.width / LAYOUT_WIDTH
+    page_h = img.height / scale
 
     made = 0
     for issue in issues:
         if made >= MAX_CROPS:
             break
         try:
-            rects, region = _rects_for_issue(issue, dom)
-            had_rects = bool(rects)
-            # keep only genuinely-visible, non-blank boxes
-            rects = [r for r in rects if _valid_geom(r, page_h) and not _is_blank_region(img, r, scale)]
+            targets, region, cat, allow_frame = _locate(issue, dom)
+            title = issue.get("title") or issue.get("id") or "Issue"
 
-            if had_rects and not rects:
-                # the offending element(s) aren't visible on the page (e.g. on
-                # another carousel slide). If there's no meaningful region
-                # fallback, skip this issue's crop entirely.
-                if region is None:
-                    continue
+            valid = [(r, el) for (r, el) in targets
+                     if _valid_geom(r, page_h) and not _is_blank(img, r, scale)]
 
-            crop = _crop_and_highlight(img, rects, region)
+            if valid:
+                rects   = [r for r, _ in valid]
+                context = _short((valid[0][1].get("text") or "").strip(), 74) or "Matched element"
+                crop = _render(img, rects, None, scale, title, cat, 0.75, context, frame=False)
+                highlighted = True
+            elif allow_frame and region:
+                crop = _render(img, [], region, scale, title, cat, 0.30,
+                               "Contextual Layout Framing Viewport", frame=True)
+                highlighted = False
+            else:
+                continue  # specific element not visible → skip, no blank box
         except Exception:
             crop = None
+            highlighted = False
+
         if crop:
             issue["screenshot_crop"]  = crop
-            issue["crop_highlighted"] = bool(rects)
+            issue["crop_highlighted"] = highlighted
             made += 1
