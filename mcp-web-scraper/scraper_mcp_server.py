@@ -71,7 +71,7 @@ SCRAPINGBEE_API_KEY = os.environ.get("SCRAPINGBEE_API_KEY", "")
 HUNTER_API_KEY      = os.environ.get("HUNTER_API_KEY", "")
 OPENAI_API_KEY      = os.environ.get("OPENAI_API_KEY", "")
 PORT                = int(os.environ.get("PORT", 8000))
-SERVER_VERSION      = "2.8.0"
+SERVER_VERSION      = "2.9.0"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -281,8 +281,9 @@ def scrape_sync(url: str, run_cro: bool = True, industry: str = "all") -> dict:
     log.info("Scraping HTML: %s", url)
     try:
         params = {
-            "render_js":   "true",
-            "wait":        "3500",
+            "render_js":     "true",
+            "wait":          "3500",
+            "wait_browser":  "networkidle2",   # wait for the page to actually finish loading, not just a fixed timer
             "window_width":  "1440",
             "window_height": "2000",
             "js_scenario": {"instructions": [{"evaluate": COORDINATE_JS}]},
@@ -328,11 +329,31 @@ def scrape_sync(url: str, run_cro: bool = True, industry: str = "all") -> dict:
         return result
 
     # Step 2 — screenshot
+    # Scroll the full page top-to-bottom-and-back first: many sites only
+    # render hero video/lazy images/carousels once they scroll into view, so a
+    # screenshot taken immediately after load captures placeholders/blank
+    # areas. wait_browser=networkidle2 also ensures we wait for the page to
+    # actually finish loading rather than a fixed timer that can fire early.
+    SCROLL_JS = (
+        "(async () => {"
+        "  const sleep = (ms) => new Promise(r => setTimeout(r, ms));"
+        "  const h = document.body.scrollHeight;"
+        "  const step = Math.max(400, Math.floor(window.innerHeight * 0.8));"
+        "  for (let y = 0; y <= h; y += step) {"
+        "    window.scrollTo(0, y);"
+        "    await sleep(220);"
+        "  }"
+        "  window.scrollTo(0, 0);"
+        "  await sleep(300);"
+        "})();"
+    )
     log.info("Capturing screenshot: %s", url)
     try:
         ss = client.get(url, params={
             "render_js":             "true",
-            "wait":                  "2500",
+            "wait":                  "3000",
+            "wait_browser":          "networkidle2",
+            "js_scenario": {"instructions": [{"evaluate": SCROLL_JS}, {"wait": 600}]},
             "screenshot":            "true",
             "screenshot_full_page":  "true",
             "window_width":          "1440",
