@@ -146,7 +146,7 @@ try:
 except ImportError:
     CROPS_AVAILABLE = False
 
-    def attach_crops(issues, screenshot_b64):  # type: ignore
+    def attach_crops(issues, screenshot_b64, dom_elements=None):  # type: ignore
         pass
 
 
@@ -156,7 +156,7 @@ def _run_cro(html: str, dom_elements: list, industry: str, url: str,
         report = run_audit(html, dom_elements, industry=industry, url=url)
         wolf   = run_wolf(report, html, dom_elements, industry=industry)
         if screenshot_b64 and wolf.get("client_report"):
-            attach_crops(wolf["client_report"], screenshot_b64)
+            attach_crops(wolf["client_report"], screenshot_b64, dom_elements)
         return wolf
     except Exception as exc:
         log.warning("CRO error for %s: %s", url, exc, exc_info=True)
