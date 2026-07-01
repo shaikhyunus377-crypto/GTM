@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 import sys
 import json
+import re
 import base64
 import logging
 import asyncio
@@ -70,7 +71,7 @@ SCRAPINGBEE_API_KEY = os.environ.get("SCRAPINGBEE_API_KEY", "")
 HUNTER_API_KEY      = os.environ.get("HUNTER_API_KEY", "")
 OPENAI_API_KEY      = os.environ.get("OPENAI_API_KEY", "")
 PORT                = int(os.environ.get("PORT", 8000))
-SERVER_VERSION      = "2.5.0"
+SERVER_VERSION      = "2.6.0"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -88,7 +89,9 @@ COORDINATE_JS = (
     "  'a, button, h1, h2, h3, h4, h5, h6, img, input, form, label, section, header, footer'"
     ")).map(el => {"
     "  const rect = el.getBoundingClientRect();"
-    "  return { tag: el.tagName.toLowerCase(), x: rect.left + window.scrollX,"
+    "  return { tag: el.tagName.toLowerCase(),"
+    "           text: (el.innerText || el.textContent || '').replace(/\\s+/g,' ').trim().slice(0,60),"
+    "           x: rect.left + window.scrollX,"
     "           y: rect.top + window.scrollY, width: rect.width, height: rect.height };"
     "});"
     "const c = document.createElement('div');"
@@ -105,20 +108,48 @@ def safe_folder(url: str) -> str:
     return "".join(c if c.isalnum() or c in "._-" else "_" for c in name)
 
 
+def _norm_txt(t: str) -> str:
+    return re.sub(r"\s+", " ", (t or "")).strip().lower()[:60]
+
+
 def build_dom_states(html: str, url: str, live_elements: list) -> dict:
     soup     = BeautifulSoup(html, "html.parser")
     elements = []
+
+    # Index live (browser-measured) elements by tag, preserving order, each with
+    # a "used" flag so we can consume matches. We match soup elements to their
+    # real coordinates by (tag + text) first, then positionally within the tag —
+    # far more reliable than the previous global-index alignment.
+    live_by_tag: dict[str, list] = {}
+    for le in (live_elements or []):
+        live_by_tag.setdefault(le.get("tag"), []).append([le, False])
+
+    def take(tag: str, text: str):
+        pool = live_by_tag.get(tag)
+        if not pool:
+            return None
+        nt = _norm_txt(text)
+        if nt:
+            for pair in pool:
+                if not pair[1] and _norm_txt(pair[0].get("text", "")) == nt:
+                    pair[1] = True
+                    return pair[0]
+        for pair in pool:            # positional fallback within same tag
+            if not pair[1]:
+                pair[1] = True
+                return pair[0]
+        return None
+
     for idx, el in enumerate(soup.find_all(TAGS)):
         tag  = el.name
         text = (el.get_text(strip=True) or "")[:150]
         x, y, w, h = 40, 120 + idx * 60, 280, 45
-        if idx < len(live_elements):
-            live = live_elements[idx]
-            if live.get("tag") == tag:
-                x = live.get("x", x)
-                y = live.get("y", y)
-                w = live.get("width", w)
-                h = live.get("height", h)
+        live = take(tag, text)
+        if live:
+            x = live.get("x", x)
+            y = live.get("y", y)
+            w = live.get("width", w)
+            h = live.get("height", h)
         elements.append({
             "tag":       tag,
             "text":      text,

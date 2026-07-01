@@ -111,28 +111,73 @@ def _detect_nav_overload(dom_elements: list) -> dict | None:
     }
 
 
+# Real conversion-action intent (NOT navigation). Nav labels like Home, About,
+# Services, Fees, Portal, Team, Find us, Location must NOT count as CTAs.
+ACTION_CTA_RE = re.compile(
+    r"book|schedul|appoint|reserv|consult|get\s*start|sign\s*up|free\s*trial|"
+    r"call\s*now|get\s*(a\s*)?quote|request|buy\b|order\b|enroll|register|demo|"
+    r"apply\b|start\s*(now|today|free)|subscribe|donate|checkout|add\s*to\s*cart|"
+    r"get\s*(started|your|a\s*free)|claim|free\s*(quote|consult|audit)",
+    re.I,
+)
+CTA_CLASS_RE = re.compile(
+    r"\b(btn|button|cta|call-to-action|hero.?btn|primary-action|booking|appointment)\b",
+    re.I,
+)
+# Button/link text that is navigation/UI chrome, never a conversion CTA
+NAV_NOISE_RE = re.compile(
+    r"^(menu|toggle|search|close|open|home|next|prev(ious)?|back|skip|×|☰|\+|-)$",
+    re.I,
+)
+
+
+def _classes(e: dict) -> str:
+    cls = e.get("class") or []
+    return " ".join(cls) if isinstance(cls, list) else str(cls)
+
+
+def _is_action_cta(e: dict) -> bool:
+    """True only for genuine conversion actions — excludes nav/menu items."""
+    text = (e.get("text") or "").strip()
+    if len(text) <= 2 or NAV_NOISE_RE.match(text):
+        return False
+    if ACTION_CTA_RE.search(text):
+        return True
+    if CTA_CLASS_RE.search(_classes(e)):
+        return True
+    # A <button> with real text is usually an action (nav toggles already excluded above)
+    if e.get("tag") == "button":
+        return True
+    return False
+
+
 def _detect_cta_hierarchy(dom_elements: list) -> dict | None:
-    """Detect too many equal-weight CTAs above fold — no clear primary action."""
+    """Detect too many equal-weight *action* CTAs above fold — no clear primary."""
     fold_ctas = [
         e for e in dom_elements
         if e.get("tag") in ("a", "button")
         and dom_visible(e)
         and 0 < dom_y(e) <= 900
+        and _is_action_cta(e)          # nav/menu items excluded here
     ]
 
-    unique_cta_labels = list({
-        (e.get("text") or "").strip()[:50]
-        for e in fold_ctas
-        if (e.get("text") or "").strip() and len((e.get("text") or "").strip()) > 2
-    })
+    seen, unique_cta_labels, samples = set(), [], []
+    for e in fold_ctas:
+        label = (e.get("text") or "").strip()[:50]
+        key = label.lower()
+        if label and key not in seen:
+            seen.add(key)
+            unique_cta_labels.append(label)
+            samples.append({"tag": e.get("tag"), "text": label, "y": dom_y(e)})
 
-    # Only flag if many unique CTAs with no obvious primary
-    if len(unique_cta_labels) < 6:
+    # Only flag when there are genuinely many competing *action* CTAs
+    if len(unique_cta_labels) < 5:
         return None
 
+    labels_str = ", ".join(f"'{l}'" for l in unique_cta_labels[:6])
     return {
         "id":               "cta_hierarchy",
-        "title":            f"{len(unique_cta_labels)} competing CTAs above the fold — no clear primary action",
+        "title":            f"{len(unique_cta_labels)} competing action CTAs above the fold — no clear primary",
         "severity":         "high",
         "confidence":       "confirmed",
         "confidence_score": 80,
@@ -142,22 +187,19 @@ def _detect_cta_hierarchy(dom_elements: list) -> dict | None:
         "industry_tags":    ["all"],
         "origin":           "bot",
         "fix_effort":       "hours",
-        "affected_elements": [
-            {"tag": "a", "text": l[:50], "y": 0} for l in unique_cta_labels[:6]
-        ],
+        "affected_elements": samples[:6],
         "findings": [
-            f"{len(unique_cta_labels)} unique CTA labels detected in the first 900px. "
-            "When visitors see Join, Renew, Find Dentist, Member Savings, Events, "
-            "and Classifieds with equal visual weight, they cannot identify the primary action. "
-            "Decision paralysis increases and all CTAs underperform."
+            f"{len(unique_cta_labels)} distinct action buttons appear in the first 900px "
+            f"({labels_str}). With several conversion actions competing at equal visual weight, "
+            "visitors can't tell which is the primary one — clicks get diluted across all of them. "
+            "(Navigation menu items are excluded from this count.)"
         ],
         "fix": (
-            "Establish a clear CTA hierarchy: one Primary (high-contrast button, e.g. 'Join AzDA'), "
-            "one Secondary (outline button, e.g. 'Renew Membership'), "
-            "and move tertiary actions (Find Dentist, Events) to the navigation or below the fold. "
-            "The primary CTA should be visually dominant within 1 second of landing."
+            "Establish one clear hierarchy: a single high-contrast primary CTA (e.g. 'Book Now'), "
+            "one lower-emphasis secondary action (outline/text button), and move the rest below "
+            "the fold or into the nav. The primary CTA should be visually dominant within 1 second."
         ),
-        "evidence": [f"Above-fold CTA: '{l}'" for l in unique_cta_labels[:8]],
+        "evidence": [f"Above-fold action CTA: '{l}'" for l in unique_cta_labels[:8]],
     }
 
 
