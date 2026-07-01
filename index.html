@@ -1138,7 +1138,7 @@ function showScreenshot(idx) {
   if (!r.screenshot_b64) return;
   _ssIdx=idx;
   document.getElementById('ss-modal-title').textContent=urls[idx].url.replace(/https?:\/\//, '');
-  document.getElementById('ss-modal-img').src='data:image/png;base64,'+r.screenshot_b64;
+  document.getElementById('ss-modal-img').src='data:'+(r.screenshot_mime||'image/png')+';base64,'+r.screenshot_b64;
   document.getElementById('ss-modal').style.display='flex';
 }
 function closeScreenshot() { document.getElementById('ss-modal').style.display='none'; document.getElementById('ss-modal-img').src=''; }
@@ -1147,8 +1147,9 @@ function dlScreenshot() {
   const r=results[urls[_ssIdx].url]||{};
   if (!r.screenshot_b64) return;
   const a=document.createElement('a');
-  a.href='data:image/png;base64,'+r.screenshot_b64;
-  a.download=urls[_ssIdx].url.replace(/https?:\/\//,'').replace(/[^a-z0-9]/gi,'_')+'.png';
+  const ext=(r.screenshot_mime==='image/jpeg')?'jpg':'png';
+  a.href='data:'+(r.screenshot_mime||'image/png')+';base64,'+r.screenshot_b64;
+  a.download=urls[_ssIdx].url.replace(/https?:\/\//,'').replace(/[^a-z0-9]/gi,'_')+'.'+ext;
   a.click();
 }
 
