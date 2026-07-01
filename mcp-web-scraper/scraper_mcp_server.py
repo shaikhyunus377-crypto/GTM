@@ -71,7 +71,7 @@ SCRAPINGBEE_API_KEY = os.environ.get("SCRAPINGBEE_API_KEY", "")
 HUNTER_API_KEY      = os.environ.get("HUNTER_API_KEY", "")
 OPENAI_API_KEY      = os.environ.get("OPENAI_API_KEY", "")
 PORT                = int(os.environ.get("PORT", 8000))
-SERVER_VERSION      = "2.7.0"
+SERVER_VERSION      = "2.8.0"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -115,6 +115,49 @@ COORDINATE_JS = (
     "c.innerText = JSON.stringify(elements);"
     "document.body.appendChild(c);"
 )
+
+
+try:
+    from PIL import Image as _PILImage
+    _PIL_OK = True
+except ImportError:
+    _PIL_OK = False
+
+
+def _prep_screenshot(content: bytes) -> dict:
+    """Downscale + compress a full-page screenshot so it always fits the
+    response (long pages routinely exceed the old 1.5MB cap). Normalises width
+    to 1440 (== the DOM-coordinate layout width, so crops map 1:1), keeps PNG
+    when small enough, otherwise falls back to progressively-compressed JPEG."""
+    import io as _io
+    if not _PIL_OK:
+        if len(content) <= 1_500_000:
+            return {"b64": base64.b64encode(content).decode(), "mime": "image/png", "error": None}
+        return {"b64": None, "mime": None,
+                "error": f"Screenshot too large ({len(content)//1024}KB) and image tools unavailable"}
+    try:
+        im = _PILImage.open(_io.BytesIO(content)); im.load()
+        im = im.convert("RGB")
+    except Exception as exc:
+        return {"b64": None, "mime": None, "error": f"Unprocessable screenshot: {exc}"}
+
+    if im.width > 1440:
+        im = im.resize((1440, max(1, round(im.height * 1440 / im.width))))
+    if im.height > 16000:                       # guard against runaway pages
+        im = im.crop((0, 0, im.width, 16000))
+
+    buf = _io.BytesIO(); im.save(buf, format="PNG", optimize=True)
+    if buf.tell() <= 1_800_000:
+        return {"b64": base64.b64encode(buf.getvalue()).decode(), "mime": "image/png", "error": None}
+
+    for q in (85, 78, 70, 62):
+        buf = _io.BytesIO(); im.save(buf, format="JPEG", quality=q, optimize=True)
+        if buf.tell() <= 2_600_000:
+            return {"b64": base64.b64encode(buf.getvalue()).decode(), "mime": "image/jpeg", "error": None}
+
+    im = im.resize((1080, max(1, round(im.height * 1080 / im.width))))
+    buf = _io.BytesIO(); im.save(buf, format="JPEG", quality=66, optimize=True)
+    return {"b64": base64.b64encode(buf.getvalue()).decode(), "mime": "image/jpeg", "error": None}
 
 
 def safe_folder(url: str) -> str:
@@ -227,25 +270,43 @@ def scrape_sync(url: str, run_cro: bool = True, industry: str = "all") -> dict:
         "html": None,
         "dom_states": None,
         "screenshot_b64": None,
+        "screenshot_mime": "image/png",
         "screenshot_error": None,
         "cro_audit": None,
         "tech_intelligence": None,
         "error": None,
     }
 
-    # Step 1 — rendered HTML + coordinate injection
+    # Step 1 — rendered HTML + coordinate injection (retry transient 5xx)
     log.info("Scraping HTML: %s", url)
     try:
-        resp = client.get(url, params={
+        params = {
             "render_js":   "true",
             "wait":        "3500",
             "window_width":  "1440",
             "window_height": "2000",
             "js_scenario": {"instructions": [{"evaluate": COORDINATE_JS}]},
             "block_ads":   "true",
-        })
+        }
+        resp = client.get(url, params=params)
+        # ScrapingBee returns 5xx when rendering the target fails — often
+        # transient or anti-bot. Retry once, the second time via premium proxy.
+        for attempt in range(2):
+            if resp.status_code < 500:
+                break
+            log.warning("ScrapingBee %s on %s — retry %d", resp.status_code, url, attempt + 1)
+            retry_params = dict(params)
+            if attempt == 1:
+                retry_params["premium_proxy"] = "true"
+            resp = client.get(url, params=retry_params)
         if resp.status_code != 200:
-            result["error"] = f"ScrapingBee HTTP {resp.status_code}"
+            if resp.status_code >= 500:
+                result["error"] = (f"ScrapingBee HTTP {resp.status_code} — could not render this site "
+                                    f"(it may block scrapers or time out). Try again or enable premium proxy.")
+            elif resp.status_code in (401, 403):
+                result["error"] = f"ScrapingBee HTTP {resp.status_code} — API key rejected or out of credits."
+            else:
+                result["error"] = f"ScrapingBee HTTP {resp.status_code}"
             return result
 
         html = resp.text
@@ -278,12 +339,13 @@ def scrape_sync(url: str, run_cro: bool = True, industry: str = "all") -> dict:
             "block_ads":             "true",
         })
         if ss.status_code == 200:
-            size_kb = len(ss.content) // 1024
-            if len(ss.content) <= 1_500_000:
-                result["screenshot_b64"] = base64.b64encode(ss.content).decode()
+            prep = _prep_screenshot(ss.content)
+            if prep.get("b64"):
+                result["screenshot_b64"]  = prep["b64"]
+                result["screenshot_mime"] = prep["mime"]
             else:
-                result["screenshot_error"] = f"Too large ({size_kb}KB > 1500KB)"
-                log.warning("Screenshot too large for %s: %dKB", url, size_kb)
+                result["screenshot_error"] = prep.get("error") or "screenshot processing failed"
+                log.warning("Screenshot prep failed for %s: %s", url, result["screenshot_error"])
         else:
             result["screenshot_error"] = f"ScrapingBee HTTP {ss.status_code}"
             log.warning("Screenshot HTTP error for %s: %d", url, ss.status_code)
