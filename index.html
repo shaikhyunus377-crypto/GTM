@@ -124,6 +124,7 @@
       <button class="btn btn-yellow btn-sm" onclick="runAllHunter()">👤 Run all DM</button>
       <button class="btn btn-teal btn-sm" onclick="generateAllEmails()">✉ Write all emails</button>
       <button class="btn btn-green btn-sm" onclick="downloadAll()">↓ Download all</button>
+      <button class="btn btn-primary btn-sm" onclick="getQualifiedLeads()">🎯 Get/Download Qualified Leads</button>
       <button class="btn btn-slate btn-sm" onclick="clearAll()">✕ Clear</button>
     </div>
   </div>
@@ -1006,6 +1007,125 @@ function _dl(content, filename, type) {
   a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1000);
 }
 function safe(u) { return (u.name||u.url).replace(/[^a-zA-Z0-9._-]/g,'_').slice(0,60); }
+
+// ── Qualified Leads: filter + auto-email + export ──────────────────────────────────────────
+// Exclude these from counting as a "paid tool" even if a bot ever tags them there
+const NON_PAID_TOOLS = new Set(['wordpress','shopify','elementor','elementor pro']);
+
+function croIssueCount(r) {
+  const cro = r.cro_audit; if (!cro || cro.error) return 0;
+  const list = cro.client_report || cro.issues || [];
+  if (Array.isArray(list) && list.length) return list.length;
+  const cs = cro.client_summary || cro.summary || {};
+  return (cs.high||cs.confirmed_high||0) + (cs.medium||cs.confirmed_medium||0) + (cs.low||0);
+}
+function paidToolCount(r) {
+  const t = r.tech_intelligence; if (!t || t.error) return 0;
+  const tools = (t.paid_tools||[]).filter(x => !NON_PAID_TOOLS.has(String(x).trim().toLowerCase()));
+  return tools.length;
+}
+function hasDecisionMaker(r) {
+  const h = r.hunter_data;
+  return !!(h && h.found && (h.top_contacts||[]).length && (h.top_contacts[0].email||h.top_contacts[0].name));
+}
+function isQualifiedLead(idx) {
+  const u = urls[idx], r = results[u.url]||{};
+  if (r.status !== 'done') return false;
+  return croIssueCount(r) >= 1 && paidToolCount(r) >= 1 && !!r.screenshot_b64 && hasDecisionMaker(r);
+}
+
+function csvEscape(v) {
+  const s = (v===null||v===undefined) ? '' : String(v);
+  return /[",\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s;
+}
+
+async function getQualifiedLeads() {
+  const base = cfg.api();
+  if (!base) { alert('Set API URL'); return; }
+
+  const qualifiedIdx = urls.map((_,i)=>i).filter(isQualifiedLead);
+  if (!qualifiedIdx.length) {
+    alert('No qualified leads yet.\n\nA lead qualifies once it has: a completed scrape, at least 1 CRO issue, at least 1 paid tool (CRM/booking/forms/etc, excluding WordPress/Shopify/Elementor), a screenshot, and a decision-maker contact from Hunter.\n\nRun CRO + DM lookup on your leads first.');
+    return;
+  }
+
+  const btn = document.querySelector('[onclick="getQualifiedLeads()"]');
+  if (btn) { btn.disabled = true; btn.textContent = `⏳ Qualifying ${qualifiedIdx.length}...`; }
+
+  // Auto-generate the personalized email for every qualified lead that doesn't have one yet
+  const needEmail = qualifiedIdx.filter(i => { const r=results[urls[i].url]||{}; return !r.email || r.email.error; });
+  if (needEmail.length) {
+    const pool=[...needEmail];
+    await Promise.all(Array.from({length:Math.min(cfg.workers(),pool.length)}, async()=>{
+      while (pool.length) {
+        const i = pool.shift();
+        if (btn) btn.textContent = `✉ Writing emails... (${needEmail.length-pool.length}/${needEmail.length})`;
+        await generateEmailSilent(i);
+      }
+    }));
+  }
+
+  if (btn) { btn.textContent = '📦 Building spreadsheet...'; }
+  downloadQualifiedCsv(qualifiedIdx);
+
+  if (btn) { btn.disabled = false; btn.textContent = '🎯 Get/Download Qualified Leads'; }
+}
+
+// Same as generateEmail() but never opens the modal (used for bulk qualification)
+async function generateEmailSilent(idx) {
+  if (emailRunning.has(idx)) return;
+  const u=urls[idx], r=results[u.url]||{}, base=cfg.api();
+  if (!base) return;
+  if (r.email && !r.email.error) return;
+  emailRunning.add(idx); updateRow(idx);
+  try {
+    const resp=await fetch(base+'/email',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({lead:buildLeadRecord(idx)})});
+    const data=await resp.json();
+    results[u.url].email = resp.ok && !data.error ? data : {error:data.error||`HTTP ${resp.status}`};
+  } catch(e) { results[u.url].email={error:e.message}; }
+  emailRunning.delete(idx); updateRow(idx);
+}
+
+function downloadQualifiedCsv(idxList) {
+  const headers = [
+    '#','Business Name','Website','Category','City','Phone','Address',
+    'Google Rating','Google Review Count',
+    'Decision Maker Name','Decision Maker Role','Decision Maker Email','Decision Maker LinkedIn','Decision Maker Seniority',
+    'CRO High','CRO Medium','CRO Low','Top CRO Issue','Top CRO Fix',
+    'Tech CMS','Tech CRM','Tech Booking Tool','Tech Paid Forms','Paid Tools Count','Paid Tools List',
+    'Google Analytics','Meta Ads','Google Ads','Commercial Maturity Score',
+    'Screenshot Available','Email Subject','Email Body',
+  ];
+  const rows = [headers];
+
+  idxList.forEach((idx,n) => {
+    const u = urls[idx], r = results[u.url]||{};
+    const h = r.hunter_data||{}, c=(h.top_contacts||[])[0]||{};
+    const cro = r.cro_audit||{};
+    const cs = cro.client_summary||cro.summary||{};
+    const issues = cro.client_report||cro.issues||[];
+    const top = issues[0]||{};
+    const t = r.tech_intelligence||{}, ts = t.summary||{};
+    const paidTools = (t.paid_tools||[]).filter(x=>!NON_PAID_TOOLS.has(String(x).trim().toLowerCase()));
+    const email = r.email||{};
+
+    rows.push([
+      n+1, u.name||'', u.url, u.category||'', u.city||'', u.phone||'', u.address||'',
+      u.rating??'', u.reviews??'',
+      c.name||'', c.position||'', c.email||'', c.linkedin||'', c.seniority||'',
+      cs.high||cs.confirmed_high||0, cs.medium||cs.confirmed_medium||0, cs.low||0,
+      top.title||'', top.fix||'',
+      ts.cms||'', ts.crm||'', ts.booking_tools||'', ts.paid_forms||'',
+      paidTools.length, paidTools.join('; '),
+      ts.google_analytics||'', ts.meta_ads?'Yes':'No', ts.google_ads?'Yes':'No', t.commercial_maturity_score??'',
+      r.screenshot_b64?'Yes':'No', email.subject||'', (email.body||'').replace(/\n/g,' / '),
+    ]);
+  });
+
+  const csv = rows.map(row => row.map(csvEscape).join(',')).join('\r\n');
+  const stamp = new Date().toISOString().slice(0,10);
+  _dl('﻿'+csv, `qualified_leads_${stamp}.csv`, 'text/csv;charset=utf-8');
+}
 function esc(s)  { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
 // ── CRO Modal ──────────────────────────────────────────────────────────────────────────────────
