@@ -1065,8 +1065,8 @@ async function getQualifiedLeads() {
     }));
   }
 
-  if (btn) { btn.textContent = '📦 Building spreadsheet...'; }
-  downloadQualifiedCsv(qualifiedIdx);
+  if (btn) { btn.textContent = '📦 Building export...'; }
+  await downloadQualifiedBundle(qualifiedIdx, btn);
 
   if (btn) { btn.disabled = false; btn.textContent = '🎯 Get/Download Qualified Leads'; }
 }
@@ -1086,15 +1086,40 @@ async function generateEmailSilent(idx) {
   emailRunning.delete(idx); updateRow(idx);
 }
 
-function downloadQualifiedCsv(idxList) {
+// Best LinkedIn across ALL returned Hunter contacts, not just the top-ranked one
+function bestLinkedin(h) {
+  const contacts = (h && h.top_contacts) || [];
+  const withLi = contacts.find(c => c.linkedin);
+  return withLi ? withLi.linkedin : '';
+}
+
+// Up to 5 CONFIRMED CRO issues (client_report is already filtered to
+// decision:"confirmed" + high-confidence findings by the backend), each with
+// the same severity/description/fix your CRO modal already shows.
+const MAX_ISSUES_IN_EXPORT = 5;
+function confirmedIssues(r) {
+  const cro = r.cro_audit||{};
+  const list = (cro.client_report||cro.issues||[]).filter(i => !i.decision || i.decision==='confirmed');
+  return list.slice(0, MAX_ISSUES_IN_EXPORT);
+}
+function issueCellText(issue) {
+  if (!issue) return '';
+  const sev  = (issue.severity||'').toUpperCase();
+  const desc = (issue.findings||[]).join(' ') || (issue.evidence||[]).join(' ');
+  const fix  = issue.fix ? ` | Fix: ${issue.fix}` : '';
+  return `[${sev}] ${issue.title||issue.id||''} - ${desc}${fix}`.trim();
+}
+
+function buildQualifiedRows(idxList) {
   const headers = [
     '#','Business Name','Website','Category','City','Phone','Address',
     'Google Rating','Google Review Count',
     'Decision Maker Name','Decision Maker Role','Decision Maker Email','Decision Maker LinkedIn','Decision Maker Seniority',
-    'CRO High','CRO Medium','CRO Low','Top CRO Issue','Top CRO Fix',
+    'CRO High','CRO Medium','CRO Low',
+    'Issue 1','Issue 2','Issue 3','Issue 4','Issue 5',
     'Tech CMS','Tech CRM','Tech Booking Tool','Tech Paid Forms','Paid Tools Count','Paid Tools List',
     'Google Analytics','Meta Ads','Google Ads','Commercial Maturity Score',
-    'Screenshot Available','Email Subject','Email Body',
+    'Issue Screenshots Included','Evidence Folder','Email Subject','Email Body',
   ];
   const rows = [headers];
 
@@ -1103,28 +1128,97 @@ function downloadQualifiedCsv(idxList) {
     const h = r.hunter_data||{}, c=(h.top_contacts||[])[0]||{};
     const cro = r.cro_audit||{};
     const cs = cro.client_summary||cro.summary||{};
-    const issues = cro.client_report||cro.issues||[];
-    const top = issues[0]||{};
+    const issues = confirmedIssues(r);
+    const issueCells = Array.from({length:MAX_ISSUES_IN_EXPORT}, (_,i)=>issueCellText(issues[i]));
     const t = r.tech_intelligence||{}, ts = t.summary||{};
     const paidTools = (t.paid_tools||[]).filter(x=>!NON_PAID_TOOLS.has(String(x).trim().toLowerCase()));
     const email = r.email||{};
+    const folder = `${String(n+1).padStart(2,'0')}_${safe(u)}`;
+    const shotsIncluded = issues.filter(i=>i.screenshot_crop).length;
 
     rows.push([
       n+1, u.name||'', u.url, u.category||'', u.city||'', u.phone||'', u.address||'',
       u.rating??'', u.reviews??'',
-      c.name||'', c.position||'', c.email||'', c.linkedin||'', c.seniority||'',
+      c.name||'', c.position||'', c.email||'', bestLinkedin(h)||c.linkedin||'', c.seniority||'',
       cs.high||cs.confirmed_high||0, cs.medium||cs.confirmed_medium||0, cs.low||0,
-      top.title||'', top.fix||'',
+      ...issueCells,
       ts.cms||'', ts.crm||'', ts.booking_tools||'', ts.paid_forms||'',
       paidTools.length, paidTools.join('; '),
       ts.google_analytics||'', ts.meta_ads?'Yes':'No', ts.google_ads?'Yes':'No', t.commercial_maturity_score??'',
-      r.screenshot_b64?'Yes':'No', email.subject||'', (email.body||'').replace(/\n/g,' / '),
+      shotsIncluded, folder+'/', email.subject||'', (email.body||'').replace(/\n/g,' / '),
     ]);
   });
+  return rows;
+}
 
-  const csv = rows.map(row => row.map(csvEscape).join(',')).join('\r\n');
+function rowsToCsv(rows) {
+  return '﻿' + rows.map(row => row.map(csvEscape).join(',')).join('\r\n');
+}
+
+// Loads JSZip from CDN on first use (kept out of the main bundle since it's
+// only needed when actually exporting screenshots).
+let _jsZipPromise = null;
+function loadJSZip() {
+  if (window.JSZip) return Promise.resolve(window.JSZip);
+  if (_jsZipPromise) return _jsZipPromise;
+  _jsZipPromise = new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js';
+    s.onload = () => resolve(window.JSZip);
+    s.onerror = () => reject(new Error('Could not load the zip library (no internet / CDN blocked)'));
+    document.head.appendChild(s);
+  });
+  return _jsZipPromise;
+}
+
+function b64ToUint8(b64) {
+  const bin = atob(b64);
+  const arr = new Uint8Array(bin.length);
+  for (let i=0;i<bin.length;i++) arr[i]=bin.charCodeAt(i);
+  return arr;
+}
+
+// Full deliverable: leads.csv + a folder per lead containing the full-page
+// screenshot and up to 5 per-issue evidence screenshots (the same
+// orange-boxed images shown in the CRO modal), zipped for a single download.
+async function downloadQualifiedBundle(idxList, btn) {
+  const rows = buildQualifiedRows(idxList);
+  const csv  = rowsToCsv(rows);
   const stamp = new Date().toISOString().slice(0,10);
-  _dl('﻿'+csv, `qualified_leads_${stamp}.csv`, 'text/csv;charset=utf-8');
+
+  let JSZip;
+  try { JSZip = await loadJSZip(); }
+  catch (e) {
+    // No internet to the CDN — still deliver the CSV so the export isn't blocked
+    _dl(csv, `qualified_leads_${stamp}.csv`, 'text/csv;charset=utf-8');
+    alert('Could not bundle screenshots (zip library failed to load), so only the CSV was downloaded:\n' + e.message);
+    return;
+  }
+
+  const zip = new JSZip();
+  zip.file('leads.csv', csv);
+
+  idxList.forEach((idx, n) => {
+    const u = urls[idx], r = results[u.url]||{};
+    const folder = zip.folder(`${String(n+1).padStart(2,'0')}_${safe(u)}`);
+    if (r.screenshot_b64) {
+      const ext = r.screenshot_mime==='image/jpeg' ? 'jpg' : 'png';
+      folder.file(`full_page_screenshot.${ext}`, b64ToUint8(r.screenshot_b64), {binary:true});
+    }
+    confirmedIssues(r).forEach((issue, i) => {
+      if (!issue.screenshot_crop) return;
+      const slug = (issue.title||issue.id||`issue_${i+1}`).toLowerCase().replace(/[^a-z0-9]+/g,'_').slice(0,40);
+      folder.file(`issue_${i+1}_${slug}.png`, b64ToUint8(issue.screenshot_crop), {binary:true});
+    });
+  });
+
+  if (btn) btn.textContent = '📦 Compressing...';
+  const blob = await zip.generateAsync({type:'blob', compression:'DEFLATE', compressionOptions:{level:6}});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `qualified_leads_${stamp}.zip`;
+  a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href), 4000);
 }
 function esc(s)  { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
