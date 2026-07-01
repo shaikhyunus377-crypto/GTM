@@ -93,6 +93,11 @@ def _bbox(el: dict) -> dict:
     return (el.get("states", {}).get("default", {}).get("bbox", {})) or {}
 
 def _rect(el: dict) -> dict | None:
+    # Browser-reported visibility: an element on an inactive carousel slide is
+    # hidden (opacity/aria-hidden) even though it has a bounding box — never
+    # highlight it.
+    if el.get("visible") is False:
+        return None
     b = _bbox(el)
     y, w, h = b.get("y", 0), b.get("width", 0), b.get("height", 0)
     if y > 0 and w > 0 and h > 0:

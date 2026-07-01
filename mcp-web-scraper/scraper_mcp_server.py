@@ -71,7 +71,7 @@ SCRAPINGBEE_API_KEY = os.environ.get("SCRAPINGBEE_API_KEY", "")
 HUNTER_API_KEY      = os.environ.get("HUNTER_API_KEY", "")
 OPENAI_API_KEY      = os.environ.get("OPENAI_API_KEY", "")
 PORT                = int(os.environ.get("PORT", 8000))
-SERVER_VERSION      = "2.6.0"
+SERVER_VERSION      = "2.6.1"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -85,12 +85,27 @@ else:
 TAGS = ['a','button','h1','h2','h3','h4','h5','h6','img','input','form','label','section','header','footer']
 
 COORDINATE_JS = (
+    # visible(): walk ancestors — an element on an inactive carousel slide is
+    # hidden via display/visibility/opacity/aria-hidden even though its
+    # getBoundingClientRect still returns a plausible box. We record real
+    # visibility so highlights never land on off-slide / hidden elements.
+    "const visible = (el) => {"
+    "  let p = el;"
+    "  while (p && p.nodeType === 1) {"
+    "    const s = getComputedStyle(p);"
+    "    if (s.display === 'none' || s.visibility === 'hidden' || parseFloat(s.opacity || '1') === 0) return false;"
+    "    if (p.getAttribute && p.getAttribute('aria-hidden') === 'true') return false;"
+    "    p = p.parentElement;"
+    "  }"
+    "  return true;"
+    "};"
     "const elements = Array.from(document.querySelectorAll("
     "  'a, button, h1, h2, h3, h4, h5, h6, img, input, form, label, section, header, footer'"
     ")).map(el => {"
     "  const rect = el.getBoundingClientRect();"
     "  return { tag: el.tagName.toLowerCase(),"
     "           text: (el.innerText || el.textContent || '').replace(/\\s+/g,' ').trim().slice(0,60),"
+    "           vis: visible(el),"
     "           x: rect.left + window.scrollX,"
     "           y: rect.top + window.scrollY, width: rect.width, height: rect.height };"
     "});"
@@ -144,12 +159,14 @@ def build_dom_states(html: str, url: str, live_elements: list) -> dict:
         tag  = el.name
         text = (el.get_text(strip=True) or "")[:150]
         x, y, w, h = 40, 120 + idx * 60, 280, 45
+        visible = True
         live = take(tag, text)
         if live:
             x = live.get("x", x)
             y = live.get("y", y)
             w = live.get("width", w)
             h = live.get("height", h)
+            visible = bool(live.get("vis", True))
         elements.append({
             "tag":       tag,
             "text":      text,
@@ -157,6 +174,7 @@ def build_dom_states(html: str, url: str, live_elements: list) -> dict:
             "class":     el.get("class"),
             "role":      el.get("role"),
             "aria_label": el.get("aria-label"),
+            "visible":   visible,
             "states": {
                 "default": {
                     "display":    "block",
