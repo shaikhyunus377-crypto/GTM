@@ -71,7 +71,7 @@ SCRAPINGBEE_API_KEY = os.environ.get("SCRAPINGBEE_API_KEY", "")
 HUNTER_API_KEY      = os.environ.get("HUNTER_API_KEY", "")
 OPENAI_API_KEY      = os.environ.get("OPENAI_API_KEY", "")
 PORT                = int(os.environ.get("PORT", 8000))
-SERVER_VERSION      = "2.9.0"
+SERVER_VERSION      = "2.9.1"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -539,14 +539,36 @@ async def handle_hunter(request: Request):
         "partner", "principal",
     ]
 
+    # A "decision maker" means a genuinely named person you can address by
+    # name — not any mailbox Hunter happens to index. Generic role/department
+    # aliases (info@, frontdesk@, sales@...) are never treated as a contact
+    # even if Hunter returns them, so the pipeline gate upstream doesn't burn
+    # ScrapingBee/OpenAI spend chasing an unaddressable inbox.
+    GENERIC_LOCAL_PARTS = {
+        "info", "contact", "office", "frontdesk", "front-desk", "admin",
+        "support", "hello", "sales", "help", "team", "enquiries", "inquiries",
+        "booking", "bookings", "reception", "service", "careers", "jobs",
+        "hr", "billing", "accounts", "marketing", "press", "media", "webmaster",
+        "no-reply", "noreply", "mail", "general",
+    }
+
+    def is_named_contact(e: dict) -> bool:
+        fn = (e.get("first_name") or "").strip()
+        ln = (e.get("last_name") or "").strip()
+        if not (fn or ln):
+            return False
+        local = (e.get("value") or "").split("@")[0].strip().lower()
+        return local not in GENERIC_LOCAL_PARTS
+
     def score(e):
         s = SENIORITY_SCORE.get((e.get("seniority") or "").lower(), 0)
         t = (e.get("position") or "").lower()
         s += sum(2 for kw in TITLE_KEYWORDS if kw in t)
         return s
 
-    ranked = sorted(emails, key=score, reverse=True)
-    top    = ranked[:5]  # return top 5 so frontend can show all options
+    named  = [e for e in emails if is_named_contact(e)]
+    ranked = sorted(named, key=score, reverse=True)
+    top    = ranked[:5]  # return top 5 named contacts so frontend can show all options
 
     return JSONResponse({
         "found":           bool(top),
@@ -554,12 +576,13 @@ async def handle_hunter(request: Request):
         "company_name":    organization,
         "company_website": company_website,
         "total":           len(emails),
+        "named_total":     len(named),
         "top_contacts": [
             {
                 "email":      e.get("value"),
-                "name":       f"{e.get('first_name', '')} {e.get('last_name', '')}".strip(),
-                "first_name": e.get("first_name", ""),
-                "last_name":  e.get("last_name", ""),
+                "name":       f"{(e.get('first_name') or '').strip()} {(e.get('last_name') or '').strip()}".strip(),
+                "first_name": (e.get("first_name") or "").strip(),
+                "last_name":  (e.get("last_name") or "").strip(),
                 "position":   e.get("position") or "",
                 "seniority":  e.get("seniority") or "",
                 "department": e.get("department") or "",
