@@ -139,7 +139,10 @@ def _rects_for_issue(issue: dict, dom: list[dict]) -> tuple[list[dict], tuple[in
         r = pick(lambda e: e.get("tag") == "h1", limit=1) or pick(lambda e: e.get("tag") == "h2", limit=1)
         return r, (0, 700)
     if iid in ("heading_hierarchy", "headings"):
-        return pick(lambda e: e.get("tag") in headings, limit=8), (0, 1000)
+        # No region fallback: if the actual heading elements can't be located on
+        # the visible page (e.g. they live on inactive carousel slides), we skip
+        # the crop entirely rather than box blank space.
+        return pick(lambda e: e.get("tag") in headings, limit=8), None
     if iid in ("cta_above_fold",):
         r = pick(lambda e: e.get("tag") in ("a", "button") and BOOKING_RE.search(_text(e)) and _bbox(e).get("y", 9999) <= 900)
         return r, (0, 800)
@@ -178,11 +181,44 @@ def _rects_for_issue(issue: dict, dom: list[dict]) -> tuple[list[dict], tuple[in
     return [], None
 
 
+def _valid_geom(r: dict, page_h: float) -> bool:
+    """Reject boxes that aren't actually on the visible canvas — e.g. inactive
+    carousel slides translated off-screen, or hidden elements."""
+    x, y, w, h = r["x"], r["y"], r["width"], r["height"]
+    if w < 8 or h < 8:
+        return False
+    if y <= 0 or y >= page_h - 4:          # off the top or below the page
+        return False
+    if x < -30 or x > LAYOUT_WIDTH + 30:   # translated off to a side slide
+        return False
+    if x + w < 10:                          # entirely off the left
+        return False
+    return True
+
+
+def _is_blank_region(img, r: dict, scale: float) -> bool:
+    """True if the element's box sits over essentially empty/uniform pixels
+    (a blank margin), meaning there's nothing real to highlight there."""
+    try:
+        x0 = max(0, int(r["x"] * scale));            y0 = max(0, int(r["y"] * scale))
+        x1 = min(img.width, int((r["x"] + r["width"]) * scale))
+        y1 = min(img.height, int((r["y"] + r["height"]) * scale))
+        if x1 - x0 < 6 or y1 - y0 < 6:
+            return True
+        gray = img.crop((x0, y0, x1, y1)).convert("L")
+        lo, hi = gray.getextrema()
+        return (hi - lo) < 8               # near-uniform → blank
+    except Exception:
+        return False
+
+
 def attach_crops(issues: list[dict], screenshot_b64: str | None, dom_elements: list[dict] | None = None) -> None:
     """
     Mutate each issue in-place: add 'screenshot_crop' (base64 PNG) where a
-    location on the page can be determined. Safe to call with missing PIL /
-    screenshot / dom.
+    location on the page can be determined. Elements that aren't genuinely
+    visible (off-slide carousel items, hidden nodes, blank margins) are dropped;
+    if an element-targeted issue has no valid visible element, its crop is
+    skipped rather than highlighting empty space. Safe with missing PIL/screenshot/dom.
     """
     if not screenshot_b64 or not PIL_AVAILABLE:
         return
@@ -190,6 +226,8 @@ def attach_crops(issues: list[dict], screenshot_b64: str | None, dom_elements: l
     if img is None:
         return
     dom = dom_elements or []
+    scale   = img.width / LAYOUT_WIDTH
+    page_h  = img.height / scale            # page height in layout px
 
     made = 0
     for issue in issues:
@@ -197,6 +235,17 @@ def attach_crops(issues: list[dict], screenshot_b64: str | None, dom_elements: l
             break
         try:
             rects, region = _rects_for_issue(issue, dom)
+            had_rects = bool(rects)
+            # keep only genuinely-visible, non-blank boxes
+            rects = [r for r in rects if _valid_geom(r, page_h) and not _is_blank_region(img, r, scale)]
+
+            if had_rects and not rects:
+                # the offending element(s) aren't visible on the page (e.g. on
+                # another carousel slide). If there's no meaningful region
+                # fallback, skip this issue's crop entirely.
+                if region is None:
+                    continue
+
             crop = _crop_and_highlight(img, rects, region)
         except Exception:
             crop = None
