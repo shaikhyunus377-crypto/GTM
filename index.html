@@ -133,6 +133,7 @@
     <div class="stat-pill">Total: <span class="text-white font-semibold" id="st-total">0</span></div>
     <div class="stat-pill">Done: <span class="text-green-400 font-semibold" id="st-done">0</span></div>
     <div class="stat-pill">No DM: <span class="text-yellow-400 font-semibold" id="st-nodm">0</span></div>
+    <div class="stat-pill" title="No decision maker found — scrape/CRO/OpenAI skipped to save credits">Skipped (no DM): <span class="text-slate-400 font-semibold" id="st-skipped">0</span></div>
     <div class="stat-pill">Error: <span class="text-red-400 font-semibold" id="st-error">0</span></div>
     <div class="stat-pill">CRO done: <span class="text-indigo-400 font-semibold" id="st-cro">0</span></div>
   </div>
@@ -767,9 +768,11 @@ function renderTable() {
 function rowHtml(idx) {
   const u=urls[idx], r=results[u.url]||{}, st=r.status||'pending';
   const statusCell={
-    pending:'<span class="text-slate-500">Pending</span>',
-    running:'<span class="text-yellow-400 flex items-center gap-1"><span class="spinner"></span>Scraping…</span>',
-    done:   '<span class="text-green-400">Done</span>',
+    pending:      '<span class="text-slate-500">Pending</span>',
+    checking_dm:  '<span class="text-blue-400 flex items-center gap-1"><span class="spinner"></span>Checking decision maker…</span>',
+    running:      '<span class="text-yellow-400 flex items-center gap-1"><span class="spinner"></span>Scraping…</span>',
+    done:         '<span class="text-green-400">Done</span>',
+    skipped_no_dm:'<span class="text-slate-400" title="No decision maker found via Hunter — scrape/CRO/email skipped to save credits">⏭ Skipped (no DM)</span>',
     error:  `<span class="text-red-400">Error<br><span class="text-xs text-red-300">${esc(r.error||'').slice(0,50)}</span></span>`,
   }[st]||`<span class="text-slate-400">${st}</span>`;
   const metaLine=(u.address||u.phone||u.reviews!=null)
@@ -833,6 +836,10 @@ function actionsCell(idx) {
   const r=results[urls[idx].url]||{}, st=r.status||'pending', h=r.hunter_data, parts=[];
   if (st==='pending'||st==='error') parts.push(`<button class="btn btn-primary btn-sm" onclick="runOne(${idx})">▶ Run</button>`);
   else if (st==='done') parts.push(`<button class="btn btn-slate btn-sm" onclick="runOne(${idx})">&#x21BA;</button>`);
+  else if (st==='skipped_no_dm') {
+    parts.push(`<button class="btn btn-slate btn-sm" onclick="runOne(${idx})">&#x21BA; Retry DM</button>`);
+    parts.push(`<button class="btn btn-primary btn-sm" onclick="runOne(${idx},{force:true})" title="No decision maker was found, but run the full scrape + CRO pipeline anyway">▶ Run anyway</button>`);
+  }
   if (st==='done'&&(!h||h.error)&&!hunterRunning.has(idx)) parts.push(`<button class="btn btn-yellow btn-sm" onclick="lookupHunter(${idx})">👤 DM</button>`);
   if (r.html&&!croRunning.has(idx)) parts.push(`<button class="btn btn-purple btn-sm" onclick="startCro(${idx})">${r.cro_audit?'&#x21BA; CRO':'⚙ CRO'}</button>`);
   if (st==='done') {
@@ -857,22 +864,68 @@ function updateStats() {
   document.getElementById('st-total').textContent=urls.length;
   document.getElementById('st-done').textContent=vals.filter(r=>r.status==='done').length;
   document.getElementById('st-nodm').textContent=vals.filter(r=>r.status==='done'&&r.hunter_data&&!r.hunter_data.found).length;
+  document.getElementById('st-skipped').textContent=vals.filter(r=>r.status==='skipped_no_dm').length;
   document.getElementById('st-error').textContent=vals.filter(r=>r.status==='error').length;
   document.getElementById('st-cro').textContent=vals.filter(r=>r.cro_audit&&!r.cro_audit.error).length;
 }
 
 // ── Run one ──────────────────────────────────────────────────────────────────────────────────
-async function runOne(idx) {
+// Gate: check for a decision maker FIRST via Hunter (fast + cheap) before
+// spending ScrapingBee credits and OpenAI tokens (CRO AI bot + email writer)
+// on a lead nobody can be reached at. Only leads with a confirmed decision
+// maker proceed to the full scrape+CRO(+tech) pipeline.
+async function runOne(idx, opts={}) {
   const u=urls[idx], base=cfg.api();
   if (!base) { alert('Set API URL in config'); return; }
-  results[u.url]={status:'running'}; updateRow(idx); updateStats();
+  const force     = !!(opts && opts.force);
+  const hunterKey = cfg.hunter();
+
+  if (force || !hunterKey) {
+    // Nothing to gate with (no Hunter key configured), or the user explicitly
+    // chose to run the full pipeline anyway.
+    return runPipeline(idx);
+  }
+
+  results[u.url] = {status:'checking_dm'}; updateRow(idx); updateStats();
+  let domain;
+  try { domain=new URL(u.url.startsWith('http')?u.url:'https://'+u.url).hostname.replace(/^www\./,''); }
+  catch(_) { domain=u.url.replace(/^https?:\/\/(www\.)?/,'').split('/')[0]; }
+
+  let hunterData;
+  try {
+    const resp=await fetch(base+'/hunter',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({domain,api_key:hunterKey})});
+    const data=await resp.json();
+    hunterData = resp.ok ? data : {found:false,error:data.error||`HTTP ${resp.status}`};
+  } catch(e) { hunterData = {found:false, error:e.message}; }
+
+  if (!hunterData.found) {
+    // No decision maker on this domain — stop here. No ScrapingBee call, no
+    // CRO (AI bot), no tech intelligence, no OpenAI email spend.
+    results[u.url] = {status:'skipped_no_dm', hunter_data:hunterData};
+    updateRow(idx); updateStats();
+    return;
+  }
+  await runPipeline(idx, hunterData);
+}
+
+// The expensive part: ScrapingBee scrape + CRO audit (+ tech intelligence).
+// existingHunterData carries over the DM lookup already done by the gate in
+// runOne() so we never call Hunter twice for the same lead.
+async function runPipeline(idx, existingHunterData) {
+  const u=urls[idx], base=cfg.api();
+  const carry = existingHunterData ? {hunter_data: existingHunterData} : {};
+  results[u.url]={status:'running', ...carry}; updateRow(idx); updateStats();
   try {
     const resp=await fetch(base+'/scrape',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:u.url,industry:cfg.industry(),run_cro:true})});
     const data=await resp.json();
-    results[u.url]=data.error?{status:'error',error:data.error}:{status:'done',...data};
-  } catch(e) { results[u.url]={status:'error',error:e.message}; }
+    results[u.url]=data.error
+      ? {status:'error', error:data.error, ...carry}
+      : {status:'done', ...data, ...carry};
+  } catch(e) { results[u.url]={status:'error',error:e.message, ...carry}; }
   updateRow(idx); updateStats();
-  if (results[u.url].status==='done'&&cfg.hunter()) lookupHunter(idx);
+  // Fallback path only: if we got here without the gate (no Hunter key at the
+  // time), do the DM lookup after the fact as before.
+  if (results[u.url].status==='done' && !results[u.url].hunter_data && cfg.hunter()) lookupHunter(idx);
 }
 
 async function runAll() {
