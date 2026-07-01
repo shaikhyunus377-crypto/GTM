@@ -410,6 +410,18 @@ async function pingApi(retries = 3) {
 }
 
 // ── File handling ────────────────────────────────────────────────────────────────────────────────
+// Normalizes a URL for de-duplication purposes: lowercase, no protocol, no
+// "www.", no trailing slash, no query/hash. https://Site.com/, http://site.com
+// and https://www.site.com all collapse to the same key so the same business
+// is never added to the table twice.
+function canonicalKey(u) {
+  let s = String(u||'').trim().toLowerCase();
+  s = s.replace(/^https?:\/\//,'').replace(/^www\./,'');
+  s = s.split(/[?#]/)[0];
+  s = s.replace(/\/+$/,'');
+  return s;
+}
+
 function handleDrop(e) {
   e.preventDefault(); document.getElementById('drop-zone').classList.remove('over');
   if (e.dataTransfer.files[0]) loadFromFile(e.dataTransfer.files[0]);
@@ -432,7 +444,8 @@ function parseRows(rows, filename) {
     let url='';
     if (v.startsWith('http://')||v.startsWith('https://')) url=v;
     else if (/^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z]{2,})+$/.test(v)) url='https://'+v;
-    if (url && !seen.has(url)) { seen.add(url); newUrls.push({url, name:url.replace(/^https?:\/\/(www\.)?/,'').split('/')[0]}); }
+    const key=canonicalKey(url);
+    if (url && key && !seen.has(key)) { seen.add(key); newUrls.push({url, name:url.replace(/^https?:\/\/(www\.)?/,'').split('/')[0]}); }
   }
   if (!newUrls.length) { alert('No URLs or domains found in file'); return; }
   urls=newUrls; results={};
@@ -616,13 +629,14 @@ async function startLeadsSearch() {
   // Push any newly-found leads into the table NOW (incremental render so the
   // user sees real data appear instead of staring at a spinner).
   function flushToTable() {
-    const existingSet=new Set(urls.map(u=>u.url));
+    const existingSet=new Set(urls.map(u=>canonicalKey(u.url)));
     let newly=0;
-    for (const [website,info] of found) {
-      if (existingSet.has(website)) continue;
+    for (const [key,info] of found) {
+      if (existingSet.has(key)) continue;
+      const website=info.url;
       urls.push({url:website, name:info.title||website.replace(/^https?:\/\/(www\.)?/,'').split('/')[0],
         reviews:info.reviews, rating:info.rating, address:info.address, phone:info.phone, category:info.category});
-      existingSet.add(website); newly++; totalAdded++;
+      existingSet.add(key); newly++; totalAdded++;
     }
     if (newly>0) {
       document.getElementById('drop-zone').classList.add('hidden');
@@ -647,8 +661,9 @@ async function startLeadsSearch() {
       if (seenPlaces.has(dk)) continue;
       seenPlaces.add(dk);
       const norm=website.startsWith('http')?website:'https://'+website;
-      if (found.has(norm)) continue;
-      found.set(norm,{title:item.title||item.name,address:item.address,phone:item.phone||item.phoneUnformatted,reviews,rating:item.totalScore,category:item.categoryName||item.categories?.[0]});
+      const key=canonicalKey(norm);
+      if (found.has(key)) continue;
+      found.set(key,{url:norm,title:item.title||item.name,address:item.address,phone:item.phone||item.phoneUnformatted,reviews,rating:item.totalScore,category:item.categoryName||item.categories?.[0]});
       added++;
       // Extract zip from address for phase 2
       const zip=extractZip(item.address);
@@ -1028,7 +1043,7 @@ async function auditDmSite(idx) {
   const u=urls[idx], h=(results[u.url]||{}).hunter_data;
   if (!h||!h.found) return;
   const siteUrl=h.company_website||('https://'+h.domain);
-  let ti=urls.findIndex(x=>x.url===siteUrl);
+  let ti=urls.findIndex(x=>canonicalKey(x.url)===canonicalKey(siteUrl));
   if (ti<0) { urls.push({url:siteUrl,name:h.company_name||h.domain}); results[siteUrl]={status:'pending'}; ti=urls.length-1; renderTable(); }
   const row=document.getElementById(`row-${ti}`);
   if (row) row.scrollIntoView({behavior:'smooth',block:'center'});
